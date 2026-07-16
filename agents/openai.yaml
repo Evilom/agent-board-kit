@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Board"
+  short_description: "Coordinate coding agents with a local repo board"
+  default_prompt: "Use $agent-board to install or operate a local coordination board for this repository."
+
+policy:
+  allow_implicit_invocation: true

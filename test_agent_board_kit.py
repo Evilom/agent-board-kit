@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -10,7 +12,7 @@ from pathlib import Path
 
 
 KIT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = KIT_DIR.parent.parent
+EMBEDDED_PROJECT_ROOT = KIT_DIR.parent.parent
 CLI = KIT_DIR / "agent_board.py"
 
 
@@ -365,14 +367,30 @@ class AgentBoardKitTests(unittest.TestCase):
             )
             self.assertEqual(CLI.read_bytes(), existing_cli.read_bytes())
 
-    def test_project_schema_and_compatibility_entry_stay_in_sync(self) -> None:
+    def test_cli_reports_version(self) -> None:
+        version = subprocess.run(
+            [sys.executable, str(CLI), "--version"],
+            cwd=KIT_DIR,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual("agent-board-kit 1.1.0", version.stdout.strip())
+
+    def test_embedded_project_schema_and_compatibility_entry_stay_in_sync(self) -> None:
+        project_cli = EMBEDDED_PROJECT_ROOT / "scripts" / "agent_board.py"
+        project_schema = EMBEDDED_PROJECT_ROOT / ".agents" / "board" / "schema.json"
+        if not project_cli.is_file() or not project_schema.is_file():
+            self.skipTest("toolkit is running as a standalone repository")
+
         self.assertEqual(
             (KIT_DIR / "schema.json").read_bytes(),
-            (PROJECT_ROOT / ".agents" / "board" / "schema.json").read_bytes(),
+            project_schema.read_bytes(),
         )
         result = subprocess.run(
-            [sys.executable, str(PROJECT_ROOT / "scripts" / "agent_board.py"), "--help"],
-            cwd=PROJECT_ROOT,
+            [sys.executable, str(project_cli), "--help"],
+            cwd=EMBEDDED_PROJECT_ROOT,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -380,15 +398,6 @@ class AgentBoardKitTests(unittest.TestCase):
             check=True,
         )
         self.assertIn("Shared agent bulletin board", result.stdout)
-        version = subprocess.run(
-            [sys.executable, str(CLI), "--version"],
-            cwd=PROJECT_ROOT,
-            text=True,
-            encoding="utf-8",
-            capture_output=True,
-            check=True,
-        )
-        self.assertEqual("agent-board-kit 1.1.0", version.stdout.strip())
 
 
 if __name__ == "__main__":

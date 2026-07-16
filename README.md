@@ -1,16 +1,34 @@
-# Portable Agent Board
+# Agent Board Kit
 
-一个面向 Codex、Claude Code、Cursor、ZCode 等编码 Agent 的本地协作公告板。它使用 JSON/JSONL 和跨进程文件锁记录任务范围、进度、阻塞、留言及交接，不需要服务端、数据库或第三方 Python 包。
+一个面向 Codex、Claude Code、Cursor、ZCode 等编码 Agent 的本地协作公告板。它使用 JSON/JSONL 和跨进程文件锁记录任务范围、进度、阻塞、留言及交接，不需要服务端、数据库、Node.js 或第三方 Python 包。
 
 当前版本 `1.1.0` 增加了任务生命周期校验、文件/范围冲突预警、状态备份与修复、结构化状态输出，以及可选的 Git worktree 共享存储。
 
-## 安装到其他项目
+## 适合什么场景
 
-整个 `agent-board-kit` 目录可以单独复制。安装要求 Python 3.8+，目标目录必须是 Git 项目根目录。
+- 多个编码 Agent 同时使用一个 Git checkout，开工前需要声明任务与文件范围。
+- 同一个 clone 下有多个 linked worktree，需要共享任务状态。
+- 希望协作记录可本地审计，但不想部署服务、数据库、Web UI 或完整 Agent 编排平台。
+
+它只负责协调，不负责创建 Agent、调度模型或执行任务。需要完整多 Agent 编排、跨机器消息总线或可视化控制台时，可以把它与其他系统组合使用。
+
+## 作为 Agent Skill 安装
+
+通过开源 [Skills CLI](https://github.com/vercel-labs/skills) 安装：
 
 ```powershell
-cd agent-board-kit
-python .\install.py D:\your-project
+npx skills add Evilom/agent-board-kit --skill agent-board
+```
+
+安装后可直接告诉 Agent：`Use $agent-board to install the board into this repository.` Skill 会调用同仓库的安装器，并指导 Agent 在改文件前登记、工作中更新、结束时完成或释放任务。
+
+## 直接安装到其他项目
+
+安装要求 Python 3.8+，目标目录必须是 Git 项目根目录。
+
+```powershell
+git clone https://github.com/Evilom/agent-board-kit.git
+python .\agent-board-kit\install.py D:\your-project
 ```
 
 同一个 clone 的多个 worktree 需要共享公告板时：
@@ -93,6 +111,8 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 
 | 文件 | 用途 |
 |---|---|
+| `SKILL.md` | Agent Skill 的触发条件和标准工作流 |
+| `agents/openai.yaml` | Codex 的展示和调用元数据 |
 | `agent_board.py` | 独立 CLI，唯一功能实现 |
 | `install.py` | 目标项目安装与升级 |
 | `schema.json` | 状态、留言和事件协议 |
@@ -102,5 +122,10 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 运行工具包测试：
 
 ```powershell
-python -m unittest discover -s tools/agent-board-kit -p "test_*.py"
+cd agent-board-kit
+python -m unittest -v test_agent_board_kit.py
 ```
+
+## License
+
+[MIT](LICENSE)

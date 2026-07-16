@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-board.local/schema.json",
+  "title": "Portable Agent Board protocol",
+  "description": "Schema for config.json, state.json, and one-line records in messages.jsonl and events.jsonl.",
+  "oneOf": [
+    { "$ref": "#/$defs/config" },
+    { "$ref": "#/$defs/state" },
+    { "$ref": "#/$defs/message" },
+    { "$ref": "#/$defs/event" }
+  ],
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "blocked", "done", "released"]
+    },
+    "config": {
+      "type": "object",
+      "required": ["version", "storage"],
+      "properties": {
+        "version": { "type": "integer", "const": 1 },
+        "storage": {
+          "type": "string",
+          "enum": ["checkout", "git-common"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "agentRecord": {
+      "type": "object",
+      "required": ["agent", "status", "started_at", "updated_at"],
+      "properties": {
+        "agent": { "type": "string" },
+        "tool": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "task": { "type": "string" },
+        "scope": { "$ref": "#/$defs/stringList" },
+        "files": { "$ref": "#/$defs/stringList" },
+        "branch": { "type": "string" },
+        "note": { "type": "string" },
+        "blockers": { "$ref": "#/$defs/stringList" },
+        "handoff": { "type": "string" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "finished_at": { "$ref": "#/$defs/timestamp" },
+        "stale_released_at": { "$ref": "#/$defs/timestamp" },
+        "stale_reason": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "state": {
+      "type": "object",
+      "required": ["version", "agents"],
+      "properties": {
+        "version": { "type": "integer", "const": 1 },
+        "updated_at": {
+          "oneOf": [
+            { "$ref": "#/$defs/timestamp" },
+            { "type": "null" }
+          ]
+        },
+        "agents": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/agentRecord" }
+        },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "message": {
+      "type": "object",
+      "required": ["time", "from", "to", "text"],
+      "properties": {
+        "time": { "$ref": "#/$defs/timestamp" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "text": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "event": {
+      "type": "object",
+      "required": ["version", "time", "type"],
+      "properties": {
+        "version": { "type": "integer", "const": 1 },
+        "time": { "$ref": "#/$defs/timestamp" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "agent.started",
+            "agent.updated",
+            "agent.blocked",
+            "agent.done",
+            "agent.released",
+            "message.sent",
+            "board.pruned",
+            "board.compacted",
+            "board.repaired"
+          ]
+        },
+        "agent": { "type": "string" },
+        "tool": { "type": "string" },
+        "status": { "$ref": "#/$defs/status" },
+        "previous_status": { "$ref": "#/$defs/status" },
+        "task": { "type": "string" },
+        "scope": { "$ref": "#/$defs/stringList" },
+        "files": { "$ref": "#/$defs/stringList" },
+        "branch": { "type": "string" },
+        "note": { "type": "string" },
+        "blockers": { "$ref": "#/$defs/stringList" },
+        "handoff": { "type": "string" },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" },
+        "finished_at": { "$ref": "#/$defs/timestamp" },
+        "stale_reason": { "type": "string" },
+        "replaced": { "type": "boolean" },
+        "conflicts": { "type": "array", "items": { "type": "object" } },
+        "to": { "type": "string" },
+        "text": { "type": "string" },
+        "message_time": { "$ref": "#/$defs/timestamp" },
+        "removed": { "type": "integer", "minimum": 0 },
+        "released": { "type": "integer", "minimum": 0 },
+        "pruned": { "type": "integer", "minimum": 0 },
+        "messages_removed": { "type": "integer", "minimum": 0 },
+        "hours": { "type": "number", "minimum": 0 },
+        "stale_hours": { "type": "number", "minimum": 0 },
+        "blocked_stale_hours": { "type": "number", "minimum": 0 },
+        "done_hours": { "type": "number", "minimum": 0 },
+        "keep_messages": { "type": "integer", "minimum": 0 },
+        "source": { "type": "string" },
+        "corrupt_copy": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

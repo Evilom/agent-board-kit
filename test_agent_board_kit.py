@@ -376,7 +376,7 @@ class AgentBoardKitTests(unittest.TestCase):
             capture_output=True,
             check=True,
         )
-        self.assertEqual("agent-board-kit 1.1.0", version.stdout.strip())
+        self.assertEqual("agent-board-kit 1.1.1", version.stdout.strip())
 
     def test_embedded_project_schema_and_compatibility_entry_stay_in_sync(self) -> None:
         project_cli = EMBEDDED_PROJECT_ROOT / "scripts" / "agent_board.py"

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.1.1"
 DEFAULT_ACTIVE_STALE_HOURS = 4
 DEFAULT_BLOCKED_STALE_HOURS = 24
 LOCK_WAIT_SECONDS = 30

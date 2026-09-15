@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 Agent Board coordinates agents across computers around shared tasks, messages, handoffs, evidence, and existing knowledge. The main computer runs the server and a local client; secondary computers run clients only.
 
-Network component **0.2.0** adds a Chinese web client, Codex / Claude Code launch adapters, 15 MCP tools, persistent task ownership and messages, device heartbeats, and optional Dagu execution. Local Board **1.1.1** remains compatible. Python 3.9+ is sufficient for network collaboration; no Git repository or execution engine is required to create tasks or exchange messages.
+Network component **0.3.0** adds a capability directory, project bulletins, and passive notifications for existing Codex sessions, with 21 MCP tools. Shared tasks, messages, and optional Dagu execution remain available. Local Board **1.1.1** remains compatible. Python 3.9+ is sufficient for network collaboration; no Git repository or execution engine is required to create tasks or exchange messages.
 
 ```sh
 python3 agent_board.py network --config .runtime/config.json init-server --project my-work --device mac-main --root /path/to/work
@@ -13,7 +13,15 @@ python3 agent_board.py network --config .runtime/config.json service
 python3 agent_board.py network --config .runtime/config.json open
 ```
 
-Read the [Chinese setup and Windows update guide](docs/跨设备使用指南.md) and [validation record](docs/升级验收记录-0.2.md). Windows hardware validation remains pending. Dagu runs as a separate, optional process; existing knowledge stays at its source. Git distributes program updates.
+Read the [Chinese setup and Windows update guide](docs/跨设备使用指南.md) and [validation record](docs/升级验收记录-0.2.md). Windows connectivity was verified on 0.2; the new Windows MCP tools require updating and reloading the connection. Dagu runs as a separate, optional process; existing knowledge stays at its source. Git distributes program updates.
+
+## 能力、通知与公告板（0.3）
+
+Codex 会话可以发布能力档案、查找同伴、发送私信、共享公共公告。网页显示未读提醒；现有会话在工作阶段查看通知，并自行决定如何响应。
+
+服务端保存和传递信息，不启动模型，不自动分配或认领任务。主电脑运行服务端和客户端，Windows 保持原有客户端接入。
+
+使用与更新见[通知与公告板使用指南](docs/通知与公告板使用指南.md)，验证情况见[0.3 验收记录](docs/升级验收记录-0.3.md)。
 
 ## Local Board compatibility
 
@@ -142,7 +150,7 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 Run the test suite from the repository root:
 
 ```powershell
-python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime
+python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime test_coordination
 ```
 
 ## Releases

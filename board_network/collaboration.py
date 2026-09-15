@@ -147,6 +147,7 @@ class Collaboration:
         key = "agent-" + digest([actor[0], project, local_id])[:32]
         with self.store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            old = {}
             try:
                 old = self.get(db, "agent", key)
                 if old["session_id"] != session and old["state"] != "offline" and fresh(old["last_seen"]):
@@ -162,6 +163,12 @@ class Collaboration:
                      "provider": text(body.get("provider", "mcp"), "Agent 类型", 60),
                      "capabilities": strings(body.get("capabilities", ["collaboration"]), "能力"),
                      "state": "idle", "last_seen": now(), "note": "", "registered_at": now()}
+            from .coordination import profile
+            agent['profile'] = profile(old['profile'] if 'profile' in old else body.get('profile', {}))
+            if old.get('profile_updated_at'):
+                agent['profile_updated_at'] = old['profile_updated_at']
+            if old.get('session_id') == session and old.get('state') in ('working', 'blocked'):
+                agent['state'] = old['state']
             self.put(db, "agent", agent)
             return agent
 
@@ -446,6 +453,28 @@ class Collaboration:
             return {"capabilities": [dict(id=k, **v) for k, v in CAPABILITIES.items()]}
         if path == "/v1/agents":
             return self.register_agent(actor, body) if method == "POST" else self.list_agents(actor, project)
+        if path == '/v1/agents/discover' and method == 'GET':
+            from .coordination import candidates
+            return candidates(self, actor, project, query.get('skill', []), (query.get('exclude') or [None])[0])
+        match = re.fullmatch(r'/v1/agents/([\w.-]+)/(profile|updates)', path)
+        if match:
+            from .coordination import update_profile, updates
+            if match[2] == 'profile' and method == 'POST':
+                return update_profile(self, actor, match[1], body)
+            if match[2] == 'updates' and method == 'GET':
+                return updates(self, actor, match[1], (query.get('session_id') or [None])[0])
+        if path == '/v1/bulletins':
+            from .coordination import publish, list_bulletins
+            if method == 'POST':
+                return publish(self, actor, body)
+            if method == 'GET':
+                return list_bulletins(self, actor, project, (query.get('agent_id') or [None])[0],
+                                     (query.get('session_id') or [None])[0], (query.get('before') or [None])[0],
+                                     (query.get('unread') or ['0'])[0] == '1')
+        match = re.fullmatch(r'/v1/bulletins/([\w.-]+)/read', path)
+        if match and method == 'POST':
+            from .coordination import mark_read
+            return mark_read(self, actor, match[1], body)
         match = re.fullmatch(r"/v1/agents/([\w.-]+)/heartbeat", path)
         if match and method == "POST":
             return self.heartbeat_agent(actor, match[1], body)

@@ -6,7 +6,7 @@ const stamp = v => v ? new Date(v).toLocaleString('zh-CN', {hour12:false}) : '�
 const names = {ready:'待认领',active:'进行中',blocked:'遇到阻塞',handoff:'等待交接',review:'待验收',done:'已完成',cancelled:'已取消',executing:'设备执行中',queued:'已排队',running:'正在执行',unknown:'待核实',prepared:'等待设备',failed:'执行失败',online:'在线',offline:'离线',idle:'空闲',working:'工作中',passed:'通过',unverified:'未验证'};
 const badge = status => `<span class="badge ${esc(status)}">${esc(names[status] || status)}</span>`;
 const events = {'work.created':'创建任务','work.claim':'认领任务','work.progress':'更新进度','work.block':'报告阻塞','work.handoff':'发起交接','work.handoff-accept':'接收交接','work.result':'提交结果','work.accept':'验收通过','work.reopen':'退回任务','work.assign':'分配 Agent','work.cancel':'取消任务','execution.reserved':'启动设备能力','execution.finished':'设备返回结果','work.assess':'逐项审核依据'};
-let state = {project:'',page:'tasks',work:[],agents:[],devices:[],messages:[],filter:'all',search:'',detail:null,me:null,projects:[],capabilities:[]};
+let state = {project:'',page:'bulletins',work:[],agents:[],devices:[],messages:[],bulletins:[],bulletinCursor:null,bulletinExpanded:false,bulletinUnread:0,agentSearch:'',bulletinOnlyUnread:false,filter:'all',search:'',detail:null,me:null,projects:[],capabilities:[]};
 let busy = false;
 function randomId(){const a=new Uint8Array(16);crypto.getRandomValues(a);return 'request-'+Array.from(a,x=>x.toString(16).padStart(2,'0')).join('');}
 async function api(path, body, headers={}) {
@@ -30,7 +30,7 @@ async function boot(){
   state.me=await api('/v1/me');state.projects=(await api('/v1/projects')).projects;
   state.capabilities=(await api('/v1/capabilities')).capabilities;
   $('#project').innerHTML=state.projects.map(p=>`<option value="${esc(p.project_id)}">${esc(p.name)}</option>`).join('');
-  state.project=state.projects[0]?.project_id || '';$('#identity').textContent=`${state.me.device_id} · v${state.me.version}`;
+  state.project=state.projects[0]?.project_id || '';state.bulletinExpanded=false;$('#identity').textContent=`${state.me.device_id} · v${state.me.version}`;
   $('#login').hidden=true;$('#shell').hidden=false;
   await refresh();
 }
@@ -38,25 +38,31 @@ async function refresh(){
   if(busy || !state.me || $('#shell').hidden) return;busy=true;
   try{
     const q='?project_id='+encodeURIComponent(state.project);
-    const [w,a,d,m]=await Promise.all([api('/v1/work'+q),api('/v1/agents'+q),api('/v1/devices'),api('/v1/messages'+q)]);
+    const [w,a,d,m,b]=await Promise.all([api('/v1/work'+q),api('/v1/agents'+q),api('/v1/devices'),api('/v1/messages'+q),api('/v1/bulletins'+q+'&unread='+(state.bulletinOnlyUnread?'1':'0'))]);
     const executions=await Promise.allSettled(w.work.filter(t=>t.status==='executing').map(t=>api('/v1/work/'+t.id+'/reconcile',{})));
     for(const r of executions)if(r.status==='fulfilled'){const i=w.work.findIndex(t=>t.id===r.value.id);w.work[i]=r.value;}
     state.work=w.work;state.agents=a.agents;state.devices=d.devices;state.messages=m.messages;
+    if(state.bulletinExpanded){
+      const latest=new Map(b.bulletins.map(item=>[item.id,item]));
+      state.bulletins=[...b.bulletins,...state.bulletins.filter(item=>!latest.has(item.id)&&(!state.bulletinOnlyUnread||!item.read_at))];
+    }else{state.bulletins=b.bulletins;state.bulletinCursor=b.next_cursor;}
+    state.bulletinUnread=b.unread_count;
     $('#connection-state').textContent='已连接服务端';$('#connection-state').classList.remove('offline');$('#error').hidden=true;
     $('#task-count').textContent=state.work.filter(w=>!['done','cancelled'].includes(w.status)).length || '';
-    $('#message-count').textContent=state.messages.filter(m=>!m.acknowledged_at).length || '';
+    $('#message-count').textContent=state.messages.filter(m=>!m.acknowledged_at&&state.agents.some(a=>a.id===m.to_agent_id&&a.principal_id===state.me.principal_id)).length || '';
+    $('#bulletin-count').textContent=state.bulletinUnread || '';
     if(!$('#dialog').open && !document.activeElement?.matches('input,textarea,select')) {
       if(state.detail) await detail(state.detail); else if(state.page!=='knowledge') render();
     }
   }catch(e){$('#connection-state').textContent='连接中断 · 正在重试';$('#connection-state').classList.add('offline');failure(e);}finally{busy=false;}
 }
-const subtitles={tasks:'把目标交给合适的 Agent，持续跟进到结果验收。',devices:'主电脑保存协作记录，每台设备运行自己的客户端。',agents:'接入已有的 Codex、Claude Code，保持各自的会话与工具。',messages:'联系同项目的 Agent，跟进消息送达和处理确认。',knowledge:'检索已授权的资料，查看原文来源与当前版本。'};
+const subtitles={bulletins:'共享能力、进展和需要帮助的事情，同项目的各设备都能看到。',tasks:'记录目标、工作范围、进展和验证依据。',devices:'主电脑保存协作记录，每台设备运行自己的客户端。',agents:'了解同项目 Codex 会话的能力、工具与知识范围，需要时直接联系。',messages:'联系同项目的 Agent，跟进消息送达和处理确认。',knowledge:'检索已授权的资料，查看原文来源与当前版本。'};
 function render(){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===state.page));
-  $('#heading').textContent={tasks:'任务',devices:'设备',agents:'Agent',messages:'消息',knowledge:'知识库'}[state.page];
+  $('#heading').textContent={bulletins:'公告板',tasks:'任务',devices:'设备',agents:'Agent',messages:'消息',knowledge:'知识库'}[state.page];
   $('#subtitle').textContent=subtitles[state.page];$('#eyebrow').textContent=project()?.name||'协作空间';
-  $('#header-actions').innerHTML=state.page==='tasks'&&can('collaborate')?'<button data-action="create">＋ 创建任务</button>':state.page==='messages'&&can('collaborate')?'<button data-action="message">写消息</button>':state.page==='agents'?'<button data-action="connect">接入 Agent</button>':'';
-  ({tasks:renderTasks,devices:renderDevices,agents:renderAgents,messages:renderMessages,knowledge:renderKnowledge})[state.page]();
+  $('#header-actions').innerHTML=state.page==='bulletins'&&can('collaborate')?'<button data-action="publish">发布公告</button>':state.page==='tasks'&&can('collaborate')?'<button data-action="create">＋ 创建任务</button>':state.page==='messages'&&can('collaborate')?'<button data-action="message">写消息</button>':state.page==='agents'?'<button data-action="connect">接入 Agent</button>':'';
+  ({bulletins:renderBulletins,tasks:renderTasks,devices:renderDevices,agents:renderAgents,messages:renderMessages,knowledge:renderKnowledge})[state.page]();
 }
 function renderTasks(){
   const active=state.work.filter(w=>['active','executing'].includes(w.status)).length;
@@ -70,10 +76,24 @@ function taskRows(){
   $('#task-list').innerHTML=work.length?`<div class="list">${work.map(w=>`<div class="row clickable" role="button" tabindex="0" data-work="${w.id}"><div class="row-body"><h3>${esc(w.title)}</h3><small>${esc((w.status==='done'?w.result?.summary:null)||w.blocker||w.progress||w.goal.slice(0,110))}</small><small>${esc(taskOwner(w))} · ${stamp(w.updated_at)}</small></div>${badge(w.status)}<span class="muted">→</span></div>`).join('')}</div>`:empty('从一个明确的目标开始','填写任务目标、范围和验收标准，交给已接入的 Agent，或调用设备能力。');
 }
 function renderDevices(){
-  $('#content').innerHTML=`<div class="connection-help"><h3>主电脑：服务端 + 客户端　／　副电脑：客户端</h3><p>设备在线以心跳为准。副电脑接入后，共用这里的任务、消息与授权知识；执行仍发生在目标设备上。</p></div><div class="list">${state.devices.map(d=>`<div class="row"><div class="device-icon">▱</div><div class="row-body"><h3>${esc(d.name)}</h3><small>${esc(d.os||'尚无系统信息')} · ${esc(d.environment_id||d.id)}</small><small>最近连接：${stamp(d.last_seen)} · 客户端 ${esc(d.client_version||'待接入')}</small><small>本机工具：${esc(d.tools.join('、')||'未检测到 Agent 工具')}</small></div>${badge(d.online?'online':'offline')}</div>`).join('')}</div><div class="section"><h3>设备能力</h3><p class="muted">环境检查、目录检查由 Dagu 执行。Codex / Claude Code 只读分析需要目标设备在统一配置中明确开启。设备离线时不会重复派发已经启动的执行。</p><button class="secondary" data-action="device-help">查看副电脑接入步骤</button></div>`;
+  $('#content').innerHTML=`<div class="connection-help"><h3>主电脑：服务端 + 客户端　／　副电脑：客户端</h3><p>设备在线以心跳为准。副电脑接入后，共用这里的任务、消息与授权知识；执行仍发生在目标设备上。</p></div><div class="list">${state.devices.map(d=>`<div class="row"><div class="device-icon">▱</div><div class="row-body"><h3>${esc(d.name)}</h3><small>${esc(d.os||'尚无系统信息')} · ${esc(d.environment_id||d.id)}</small><small>最近连接：${stamp(d.last_seen)} · 客户端 ${esc(d.client_version||'待接入')}</small><small>本机工具：${esc(d.tools.join('、')||'未检测到 Agent 工具')}</small></div>${badge(d.online?'online':'offline')}</div>`).join('')}</div><div class="section"><h3>设备能力</h3><p class="muted">环境检查、目录检查由 Dagu 执行。Codex 只读分析需要目标设备在统一配置中明确开启。设备离线时不会重复派发已经启动的执行。</p><button class="secondary" data-action="device-help">查看副电脑接入步骤</button></div>`;
 }
 function renderAgents(){
-  $('#content').innerHTML=`<div class="connection-help"><h3>使用你已经安装的 Agent</h3><p>通过客户端启动 Codex / Claude Code，或把 MCP 配置接入现有工具。会话连接后会自动出现在这里，并可认领任务、联系其他 Agent、查询知识和交接。</p></div>`+(state.agents.length?`<div class="list">${state.agents.map(a=>`<div class="row"><div class="device-icon">◉</div><div class="row-body"><h3>${esc(a.name)} <span class="badge">${esc(a.provider)}</span></h3><small>${esc(a.device_id)} · ${esc(a.workspace_id)} · ${esc(names[a.state])}</small><small>会话：${esc(a.session_id)}</small><small>最近心跳：${stamp(a.last_seen)}</small></div>${badge(a.online?'online':'offline')}<button class="secondary" data-message-agent="${a.id}">联系</button></div>`).join('')}</div>`:empty('还没有接入的 Agent','已安装工具会显示在设备页。只有实际建立连接的会话才会出现在这里。','<button data-action="connect">接入第一个 Agent</button>'));
+  $('#content').innerHTML=`<p class="muted">各会话主动介绍自己。能力声明供联系时参考，是否接手由当前会话决定。</p><div class="filters"><input id="agent-search" class="search" placeholder="搜索能力、工具或设备" aria-label="搜索 Agent 能力" value="${esc(state.agentSearch)}"></div><div id="agent-list"></div>`;
+  const draw=()=>{
+    state.agentSearch=$('#agent-search').value;const q=state.agentSearch.toLowerCase();
+    const agents=state.agents.filter(a=>JSON.stringify([a.name,a.device_id,a.profile||{}]).toLowerCase().includes(q)).sort((a,b)=>Number(b.online)-Number(a.online)||a.name.localeCompare(b.name));
+    $('#agent-list').innerHTML=agents.length?`<div class="list">${agents.map(a=>{const p=a.profile||{};return `<div class="row"><div class="row-body"><h3>${esc(a.name)}</h3><small>${esc(a.device_id)} · ${esc(a.workspace_id)} · ${esc(names[a.state])}</small><p>${esc(p.summary||'尚未发布能力档案')}</p><small>擅长：${esc((p.skills||[]).join('、')||'待声明')}</small><small>工具：${esc((p.tools||[]).join('、')||'待声明')}</small><small>知识：${esc((p.knowledge||[]).join('、')||'待声明')}</small>${p.limitations?.length?`<small>限制：${esc(p.limitations.join('；'))}</small>`:''}<small>最近心跳：${stamp(a.last_seen)}</small></div>${badge(a.online?'online':'offline')}<div class="actions"><button class="secondary" data-message-agent="${a.id}">联系</button>${a.principal_id===state.me.principal_id&&can('collaborate')?`<button class="secondary" data-profile-agent="${a.id}">能力档案</button>`:''}</div></div>`;}).join('')}</div>`:empty('没有匹配的 Agent','更换关键词，或让已接入的会话发布能力档案。');
+  };$('#agent-search').oninput=draw;draw();
+}
+function profileEditor(key){
+  const a=state.agents.find(a=>a.id===key);const p=a.profile||{};
+  modal('更新能力档案',field('summary','可以提供什么帮助','textarea',p.summary||'',false)+['skills','tools','knowledge','limitations'].map((k,i)=>field(k,['擅长能力','可用工具','授权知识范围','限制和未验证项'][i]+' · 每行一项','textarea',(p[k]||[]).join('\n'),false)).join(''),d=>api('/v1/agents/'+key+'/profile',{session_id:a.session_id,profile:{summary:d.summary,skills:lines(d.skills),tools:lines(d.tools),knowledge:lines(d.knowledge),limitations:lines(d.limitations)}}));
+}
+const bulletinKinds={info:'共享信息',capability:'能力介绍',help:'寻求帮助',update:'进展更新'};
+function renderBulletins(){
+  const items=state.bulletins;
+  $('#content').innerHTML=`<div class="filters"><button data-bulletin-filter="all" class="${!state.bulletinOnlyUnread?'selected':''}">全部公告</button><button data-bulletin-filter="unread" class="${state.bulletinOnlyUnread?'selected':''}">未读 ${state.bulletinUnread}</button></div>`+(items.length?`<div class="panel">${items.map(b=>`<article class="message"><div class="message-head"><span>${esc(bulletinKinds[b.category])} · ${esc(b.from_agent_id?agentName(b.from_agent_id):b.from_principal)}</span><span>${stamp(b.created_at)}</span></div><h3>${esc(b.title)} ${!b.read_at?'<span class="badge review">未读</span>':''}</h3><div class="body-text">${esc(b.body)}</div>${b.work_id?`<p><button class="text-button" data-work="${b.work_id}">查看关联任务</button></p>`:''}<div class="actions section">${!b.read_at?`<button class="text-button" data-read-bulletin="${b.id}">标为我已读</button>`:'<span class="muted">我已读</span>'}${b.from_agent_id&&can('collaborate')?`<button class="text-button" data-message-agent="${b.from_agent_id}">联系发布者</button>`:''}</div></article>`).join('')}</div>`:empty(state.bulletinOnlyUnread?'公告都已读':'还没有公告','把希望大家知道的能力、资料或进展写在这里。'))+(state.bulletinCursor?'<button class="secondary" data-action="more-bulletins">加载更早公告</button>':'');
 }
 function messageRows(messages){return messages.map(m=>`<div class="message"><div class="message-head"><span>${esc(m.from_agent_id?agentName(m.from_agent_id):m.from_principal)} → ${esc(agentName(m.to_agent_id))}</span><span>${stamp(m.created_at)}</span></div><div class="body-text">${esc(m.body)}</div><p class="muted">${m.acknowledged_at?'已确认 · '+stamp(m.acknowledged_at):m.delivered_at?'已送达，等待处理确认':'等待接收方读取'}${m.work_id?' · 任务消息':''}</p></div>`).join('');}
 function renderMessages(){
@@ -115,7 +135,7 @@ function connectHelp(){
   const local=project()?.workspaces.filter(w=>w.device_id===state.me.device_id)||[];
   const ws=local[0]?.workspace_id||'本机工作区编号';
   $('#dialog-title').textContent='接入已有 Agent';
-  $('#dialog-body').innerHTML=`<p>在对应设备的 Agent Board 目录打开终端，运行：</p><h3>Codex</h3><pre>python${navigator.platform.includes('Win')?'':'3'} agent_board.py network --config .runtime/config.json agent --project ${esc(state.project)} --workspace ${esc(ws)} --name codex-local --provider codex</pre><h3>Claude Code</h3><pre>python${navigator.platform.includes('Win')?'':'3'} agent_board.py network --config .runtime/config.json agent --project ${esc(state.project)} --workspace ${esc(ws)} --name claude-local --provider claude</pre><p>副电脑请把配置路径改成配对的 <code>.runtime/client.json</code>。工具继续使用本机登录与权限设置。</p><p class="muted">已有支持 MCP 的应用可把命令中的 agent 换成 connection，复制输出的配置。应用重载 MCP 后才会建立会话。收件箱由 Agent 调用工具读取；不会向未接入的聊天窗口注入消息。</p>`;$('#dialog').showModal();
+  $('#dialog-body').innerHTML=`<p>在对应设备的 Agent Board 目录打开终端，运行：</p><h3>Codex</h3><pre>python${navigator.platform.includes('Win')?'':'3'} agent_board.py network --config .runtime/config.json agent --project ${esc(state.project)} --workspace ${esc(ws)} --name codex-local --provider codex</pre><p>副电脑请把配置路径改成配对的 <code>.runtime/client.json</code>。工具继续使用本机登录与权限设置。</p><p class="muted">已有支持 MCP 的应用可把命令中的 agent 换成 connection，复制输出的配置。应用重载 MCP 后才会建立会话。开始工作和完成一个阶段时查看 board_updates，按需读取收件箱和公告板；已读后分别用 board_ack、board_read 确认。收件箱由 Agent 调用工具读取；不会向未接入的聊天窗口注入消息。</p>`;$('#dialog').showModal();
 }
 async function action(name){
   const w=state.current;const local=state.agents.filter(a=>a.principal_id===state.me.principal_id&&a.online);
@@ -124,6 +144,8 @@ async function action(name){
   if(name==='close') return $('#dialog').close();
   if(name==='back'){state.detail=null;return render();}
   if(name==='connect') return connectHelp();
+  if(name==='publish'){const request_id=randomId();return modal('发布公告',select('category','内容类型',Object.entries(bulletinKinds))+field('title','标题')+field('body','希望大家知道什么','textarea')+'<p class="muted">同项目设备均可阅读。需要单独联系某位同伴时可发送消息。</p>',d=>api('/v1/bulletins',{...d,project_id:state.project,request_id}));}
+  if(name==='more-bulletins'){state.bulletinExpanded=true;const b=await api('/v1/bulletins?'+new URLSearchParams({project_id:state.project,before:state.bulletinCursor,unread:state.bulletinOnlyUnread?'1':'0'}));state.bulletins.push(...b.bulletins);state.bulletinCursor=b.next_cursor;return renderBulletins();}
   if(name==='device-help') {$('#dialog-title').textContent='副电脑接入';$('#dialog-body').innerHTML='<p>1. 主电脑用 <code>network pair</code> 生成独立设备配置与令牌。</p><p>2. Windows 拉取主分支，把配对文件放入 <code>.runtime/</code>。</p><p>3. 运行 <code>scripts/client.ps1 -Config .runtime/client.json</code>。</p><p>4. 运行 <code>scripts/open.ps1 -Config .runtime/client.json</code> 打开同一个协作空间。</p><p class="muted">协作功能只需连接主电脑服务地址；需要设备执行时，再安装 Dagu 并配置执行连接证书。完整命令见 docs/跨设备使用指南.md。</p>';return $('#dialog').showModal();}
   if(name==='message')return openMessage(w?.target_agent_id);
   if(name==='create'){
@@ -150,6 +172,9 @@ document.addEventListener('click',async e=>{
     else if(b.dataset.filter){state.filter=b.dataset.filter;renderTasks();}
     else if(b.dataset.work)await detail(b.dataset.work);
     else if(b.dataset.action)await action(b.dataset.action);
+    else if(b.dataset.profileAgent)profileEditor(b.dataset.profileAgent);
+    else if(b.dataset.bulletinFilter){state.bulletinOnlyUnread=b.dataset.bulletinFilter==='unread';state.bulletinExpanded=false;await refresh();renderBulletins();}
+    else if(b.dataset.readBulletin){const receipt=await api('/v1/bulletins/'+b.dataset.readBulletin+'/read',{});const item=state.bulletins.find(item=>item.id===b.dataset.readBulletin);if(item)item.read_at=receipt.read_at;await refresh();}
     else if(b.dataset.messageAgent)openMessage(b.dataset.messageAgent);
     else if(b.dataset.copy){if(navigator.clipboard){await navigator.clipboard.writeText(b.dataset.copy);}else{const area=document.createElement('textarea');area.value=b.dataset.copy;document.body.append(area);area.select();const ok=document.execCommand('copy');area.remove();if(!ok)throw Error('浏览器未允许复制，请手动选择来源文本');}toast('已复制来源与摘要');}
     else if(b.dataset.artifact){const a=await api('/v1/artifacts/'+b.dataset.artifact);const bytes=Uint8Array.from(atob(a.content),c=>c.charCodeAt(0));if(crypto.subtle){const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(x=>x.toString(16).padStart(2,'0')).join('');if(hash!==a.sha256)throw Error('产物校验失败');}const url=URL.createObjectURL(new Blob([bytes]));const link=document.createElement('a');link.href=url;link.download=a.name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
@@ -157,7 +182,7 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.work)e.target.click();});
 $('#dialog-close').onclick=()=>$('#dialog').close();
-$('#project').onchange=async e=>{state.project=e.target.value;state.detail=null;state.filter='all';state.search='';await refresh();render();};
+$('#project').onchange=async e=>{state.project=e.target.value;state.bulletinExpanded=false;state.bulletins=[];state.detail=null;state.filter='all';state.search='';await refresh();render();};
 $('#logout').onclick=async()=>{await api('/v1/logout',{});state.me=null;showLogin();};
 $('#login-form').onsubmit=async e=>{e.preventDefault();const token=$('#token').value;$('#token').value='';try{await api('/v1/browser-session',{}, {Authorization:'Bearer '+token});$('#login-error').textContent='';await boot();}catch(err){$('#login-error').textContent=err.message;}};
 boot().catch(e=>{$('#login-error').textContent=e.message;showLogin();});

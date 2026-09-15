@@ -9,13 +9,13 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 files = [root / name for name in (
     ".gitignore", "agent_board.py", "install.py", "schema.json", "LICENSE", "README.md", "README.zh-CN.md",
-    "SKILL.md", "AGENTS.snippet.md", "test_agent_board_kit.py", "test_board_network.py", "test_collaboration.py", "test_network_runtime.py",
+    "SKILL.md", "AGENTS.snippet.md", "test_agent_board_kit.py", "test_board_network.py", "test_collaboration.py", "test_network_runtime.py", "test_coordination.py",
     "agents/openai.yaml", "scripts/server.sh", "scripts/client.sh", "scripts/client.ps1", "scripts/open.sh", "scripts/open.ps1", "scripts/update.sh", "scripts/update.ps1", "scripts/smoke_network.py", "scripts/package_network.py")]
 for folder, pattern in (("board_network", "*.py"), ("board_network/static", "*"), ("docs", "*.md"), ("examples/network", "*.json")):
     files.extend(sorted((root / folder).glob(pattern)))
 out = root / "dist"
 out.mkdir(exist_ok=True)
-archive = out / "agent-board-network-0.2.0.zip"
+archive = out / "agent-board-network-0.3.0.zip"
 with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
     for path in files:
         z.write(path, "agent-board-kit/" + path.relative_to(root).as_posix())

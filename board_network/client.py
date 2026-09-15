@@ -28,6 +28,8 @@ class AgentClient:
         self.registration = dict(project_id=project, workspace_id=workspace, agent_id=name,
                                  name=name, provider=provider, session_id=self.session,
                                  capabilities=['tasks', 'messages', 'handoff', 'knowledge', 'artifacts'])
+        if name in config.get('agent_profiles', {}):
+            self.registration['profile'] = config['agent_profiles'][name]
         self.agent = None
         self.stopped = threading.Event()
         self.thread = None
@@ -64,8 +66,25 @@ class AgentClient:
     def tools_call(self, name, args):
         body = dict(args)
         if name == 'board_status':
-            return {'self': self.agent, 'devices': self.call('/v1/devices')['devices'],
-                    'agents': self.call('/v1/agents?' + urlencode({'project_id': self.project}))['agents']}
+            agents = self.call('/v1/agents?' + urlencode({'project_id': self.project}))['agents']
+            return {'self': next((a for a in agents if a['id'] == self.agent['id']), self.agent),
+                    'devices': self.call('/v1/devices')['devices'], 'agents': agents,
+                    'notifications': self.tools_call('board_updates', {})}
+        if name == 'board_updates':
+            return self.call('/v1/agents/' + self.agent['id'] + '/updates?' + urlencode({'session_id': self.session}))
+        if name == 'board_profile':
+            return self.call('/v1/agents/' + self.agent['id'] + '/profile', dict(body, session_id=self.session))
+        if name == 'board_find':
+            return self.call('/v1/agents/discover?' + urlencode({'project_id': self.project,
+                             'exclude': self.agent['id'], 'skill': body.get('skills', [])}, doseq=True))
+        if name == 'board_bulletins':
+            return self.call('/v1/bulletins?' + urlencode(dict(project_id=self.project,
+                             **self.identity(), before=body.get('before', ''), unread='1' if body.get('unread_only') else '0')))
+        if name == 'board_publish':
+            return self.call('/v1/bulletins', dict(body, project_id=self.project,
+                             from_agent_id=self.agent['id'], session_id=self.session))
+        if name == 'board_read':
+            return self.call('/v1/bulletins/' + body['bulletin_id'] + '/read', self.identity())
         if name == 'board_tasks':
             return self.call('/v1/work?' + urlencode({'project_id': self.project}))
         if name == 'board_task':

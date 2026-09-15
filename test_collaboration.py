@@ -157,9 +157,21 @@ class CollaborationTests(unittest.TestCase):
                 cfg=self.root/(device+'.json');cfg.write_text(json.dumps(dict(self.config,hub={'url':url,'token_file':str(self.root/(device+'.token'))})))
                 p=subprocess.Popen([sys.executable,'-m','board_network.cli','--config',str(cfg),'mcp','--project','p','--workspace',device,'--name','live-'+device],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
                 processes.append(p);init=rpc(p,1,'initialize',{'protocolVersion':'2025-06-18'});self.assertIn('tools',init['capabilities'])
-                self.assertEqual(len(rpc(p,2,'tools/list')['tools']),15)
+                self.assertEqual(len(rpc(p,2,'tools/list')['tools']),21)
             a,b=processes
             aid=call(a,3,'board_status')['self']['id'];bid=call(b,3,'board_status')['self']['id']
+            call(a,20,'board_profile',{'profile':{'summary':'Mac 文档查询','skills':['资料查询'],'tools':['Codex'],
+                  'knowledge':['docs'],'limitations':['按当前用户范围处理']}})
+            self.assertEqual(call(b,20,'board_find',{'skills':['资料查询']})['agents'][0]['id'],aid)
+            bulletin=call(a,21,'board_publish',{'request_id':'mcp-bulletin','title':'共享资料能力','body':'可联系 Mac 查询来源。','category':'capability'})
+            self.assertEqual(call(b,21,'board_updates')['unread_bulletins'],1)
+            notices=call(b,22,'board_bulletins',{'unread_only':True})
+            self.assertEqual(notices['bulletins'][0]['id'],bulletin['id'])
+            self.assertEqual(call(b,23,'board_updates')['unread_bulletins'],1)
+            call(b,24,'board_read',{'bulletin_id':bulletin['id']})
+            self.assertEqual(call(b,25,'board_updates')['unread_bulletins'],0)
+            self.assertEqual(call(a,22,'board_updates')['unread_bulletins'],1)
+            self.assertEqual(call(a,23,'board_tasks')['work'],[])
             w=call(a,4,'board_create',{'request_id':'mcp-work','title':'双进程验证','goal':'协作交接','scope':['.'],'constraints':['只读'],'acceptance':['完整交接']})
             w=call(a,5,'board_claim',{'work_id':w['id'],'revision':w['revision']})
             call(a,6,'board_message',{'request_id':'mcp-msg','to_agent_id':bid,'body':'请接手','work_id':w['id']})

@@ -4,7 +4,15 @@
 
 Agent Board 让不同电脑上的 Agent 围绕同一任务协作：明确目标和范围、认领与交接、联系其他 Agent、查询已有知识，最后按真实依据验收。
 
-**主电脑安装服务端＋客户端，副电脑只安装客户端。** 网络组件 `0.2.0` 提供中文管理界面、Codex / Claude Code 接入、15 个 MCP 工具、持久任务与消息、设备心跳、Dagu 执行和已有知识接口。原本地 Board `1.1.1` 保持兼容。
+**主电脑安装服务端＋客户端，副电脑只安装客户端。** 网络组件 `0.3.0` 提供中文公告板、能力档案、Codex 会话接入与 21 个 MCP 工具；持久任务与消息、设备心跳、可选执行及已有知识接口继续兼容。原本地 Board `1.1.1` 保持兼容。
+
+## 能力、通知与公告板（0.3）
+
+Codex 会话可以发布能力档案、查找同伴、发送私信、共享公共公告。网页显示未读提醒；现有会话在工作阶段查看通知，并自行决定如何响应。
+
+服务端保存和传递信息，不启动模型，不自动分配或认领任务。主电脑运行服务端和客户端，Windows 保持原有客户端接入。
+
+使用与更新见[通知与公告板使用指南](docs/通知与公告板使用指南.md)，验证情况见[0.3 验收记录](docs/升级验收记录-0.3.md)。
 
 ## 启动中文客户端
 
@@ -29,7 +37,7 @@ python3 agent_board.py network --config .runtime/config.json open
 
 Windows 从主分支拉取程序，使用 `scripts/client.ps1`、`scripts/open.ps1` 启动；后续运行 `scripts/update.ps1` 更新源码并备份升级配置。
 
-完整命令与边界见[跨设备使用指南](docs/跨设备使用指南.md)、[升级验收记录](docs/升级验收记录-0.2.md)。Windows 原生实机联调待设备连接后进行。
+完整命令与边界见[跨设备使用指南](docs/跨设备使用指南.md)、[升级验收记录](docs/升级验收记录-0.2.md)。Windows 已完成 0.2 设备连接；0.3 新工具须在 Windows 更新并重载连接后验证。
 
 ## 原本地 Board 使用方式
 
@@ -146,7 +154,7 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 
 ```powershell
 cd agent-board-kit
-python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime
+python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime test_coordination
 ```
 
 ## 版本发布

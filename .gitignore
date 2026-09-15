@@ -1,3 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.runtime/
+dist/
+.agents/board/state.json*
+.agents/board/*.jsonl
+.agents/board/.lock

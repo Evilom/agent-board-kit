@@ -2,25 +2,22 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Agent Board Kit is a lightweight local coordination board for coding agents such as Codex, Claude Code, Cursor, and ZCode. It records task ownership, claimed scopes and files, progress, blockers, messages, and handoffs through JSON/JSONL files protected by cross-process locks.
+Agent Board coordinates agents across computers around shared tasks, messages, handoffs, evidence, and existing knowledge. The main computer runs the server and a local client; secondary computers run clients only.
 
-It requires only Python 3.8+. There is no daemon, database, Node.js runtime, or third-party Python dependency.
+Network component **0.2.0** adds a Chinese web client, Codex / Claude Code launch adapters, 15 MCP tools, persistent task ownership and messages, device heartbeats, and optional Dagu execution. Local Board **1.1.1** remains compatible. Python 3.9+ is sufficient for network collaboration; no Git repository or execution engine is required to create tasks or exchange messages.
 
-Version `1.1.1` provides task lifecycle validation, scope and file conflict warnings, state backup and repair, structured JSON output, and optional shared storage for linked Git worktrees.
-
-## Optional Server / Client Preview
-
-The new `board_network` component (`0.1.0` preview) adds cross-device coordination without changing the v1 local state protocol. The main computer runs the server and a local client; secondary computers run the client only. Dagu handles execution, while Board owns authorization, task IDs, durable evidence and acceptance. Existing document/QMD gateways remain the knowledge source.
-
-```bash
-python3 agent_board.py network --config .runtime/config.json init-server --project my-project --device mac-main --root /path/to/project
-python3 agent_board.py network --config .runtime/config.json runtime-install
-sh scripts/server.sh .runtime/config.json
+```sh
+python3 agent_board.py network --config .runtime/config.json init-server --project my-work --device mac-main --root /path/to/work
+python3 agent_board.py network --config .runtime/config.json service
+# In another terminal:
+python3 agent_board.py network --config .runtime/config.json open
 ```
 
-This preview provides a CLI and supervised services. Its only execution recipe is read-only Git metadata inspection, with native OS and commit checks. It does not transfer source snapshots or run project code. Windows clients use `scripts/client.ps1` with a server-issued pairing configuration. See the [server/client setup guide](docs/CROSS_DEVICE.zh-CN.md) for pairing, transport security, knowledge scopes, recovery and limitations.
+Read the [Chinese setup and Windows update guide](docs/跨设备使用指南.md) and [validation record](docs/升级验收记录-0.2.md). Windows hardware validation remains pending. Dagu runs as a separate, optional process; existing knowledge stays at its source. Git distributes program updates.
 
-Use `python install.py /path/to/project --network` to include network commands in an existing project. Without `--network`, installation and offline workflows remain unchanged.
+## Local Board compatibility
+
+The following sections describe the original local mode, which works without a server, database, Node.js, or third-party Python packages.
 
 ## When To Use It
 
@@ -145,12 +142,12 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 Run the test suite from the repository root:
 
 ```powershell
-python -m unittest -v test_agent_board_kit.py
+python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime
 ```
 
 ## Releases
 
-Versioned changes follow semantic versioning. Every version bump receives a `vX.Y.Z` Git tag and a matching [GitHub Release](https://github.com/Evilom/agent-board-kit/releases).
+Local and network components carry separate versions. Published archives are available in [GitHub Release](https://github.com/Evilom/agent-board-kit/releases).
 
 ## License
 

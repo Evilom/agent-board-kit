@@ -6,3 +6,5 @@ dist/
 .agents/board/state.json*
 .agents/board/*.jsonl
 .agents/board/.lock
+output/playwright/
+.playwright-cli/

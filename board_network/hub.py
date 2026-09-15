@@ -14,9 +14,10 @@ from .common import NetworkError, identifier, loopback, now, read_token
 from .dagu import Dagu
 from .knowledge import search
 from .store import Store
+from .collaboration import Collaboration
 
 
-OPERATIONS = {"read", "query", "execute", "accept"}
+OPERATIONS = {"read", "query", "execute", "accept", "collaborate"}
 
 
 def public_task(task):
@@ -29,6 +30,7 @@ class Hub:
         self.validate()
         self.store = Store(config["database"])
         self.dagu = Dagu(config["dagu"])
+        self.collaboration = Collaboration(self)
 
     def validate(self):
         projects = self.config.get("projects", {})
@@ -172,6 +174,8 @@ class Hub:
         return public_task(task)
 
     def route(self, actor, method, path, query, body):
+        if method == "GET" and path == "/v1/me":
+            return {"principal_id": actor[0], "device_id": actor[1]["device_id"], "version": VERSION}
         if method == "GET" and path == "/v1/projects":
             return self.project_list(actor)
         if method == "GET" and path == "/v1/tasks":
@@ -200,11 +204,13 @@ class Hub:
             if method == "GET" and action in (None, "events"):
                 task = self.task_for(actor, task_id, "read")
                 return {"events": self.store.events(task_id)} if action else public_task(task)
-        raise NetworkError("not found", 404)
+        return self.collaboration.route(actor, method, path, query, body)
 
 
 def make_server(config, address=None):
     hub = Hub(config)
+    from .browser import BrowserAccess, static_file
+    browser = BrowserAccess(hub)
     class Handler(BaseHTTPRequestHandler):
         server_version = "AgentBoardNetwork/" + VERSION
 
@@ -220,17 +226,45 @@ def make_server(config, address=None):
                 url = urlsplit(self.path)
                 if self.command == "GET" and url.path == "/health":
                     return self.respond(200, {"ok": True, "service": "agent-board-hub", "version": VERSION})
-                actor = hub.authenticate(self.headers.get("Authorization", ""))
+                if self.command == "GET" and url.path == "/favicon.ico":
+                    return self.respond_bytes(204, b"", "image/x-icon")
+                if self.command == "GET":
+                    asset = static_file(url.path)
+                    if asset:
+                        return self.respond_bytes(200, *asset)
+                # Browser writes must originate from this exact server. Bearer API
+                # clients do not rely on ambient cookies, but foreign origins are
+                # rejected for them too (including login and ticket exchange).
+                origin = self.headers.get("Origin")
+                if self.command == "POST" and origin:
+                    expected = ("https" if isinstance(self.connection, ssl.SSLSocket) else "http") + "://" + self.headers.get("Host", "")
+                    if origin != expected:
+                        raise NetworkError("不允许跨站请求", 403)
+                header = self.headers.get("Authorization", "")
+                if self.command == "POST" and not header and url.path != "/v1/browser-session" and not origin:
+                    raise NetworkError("浏览器请求缺少来源", 403)
                 body = {}
                 if self.command == "POST":
                     if self.headers.get("Transfer-Encoding"):
                         raise NetworkError("chunked requests are not supported")
                     length = int(self.headers.get("Content-Length", "0"))
-                    if not 0 <= length <= 16384:
-                        raise NetworkError("request body exceeds 16 KiB", 413)
+                    maximum = 1500000 if url.path.endswith("/artifacts") else 65536
+                    if not 0 <= length <= maximum:
+                        raise NetworkError("请求正文过大", 413)
                     body = json.loads(self.rfile.read(length)) if length else {}
                     if not isinstance(body, dict):
                         raise NetworkError("request body must be an object")
+                if self.command == "POST" and url.path == "/v1/browser-session":
+                    if header:
+                        body = browser.ticket(hub.authenticate(header))
+                    session = browser.exchange(body.get("ticket", ""))
+                    return self.respond(200, {"ok": True}, cookie="agentboard_session=" + session + "; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800" + ("; Secure" if isinstance(self.connection, ssl.SSLSocket) else ""))
+                actor = hub.authenticate(header) if header else browser.authenticate(self.headers.get("Cookie", ""))
+                if self.command == "POST" and url.path == "/v1/browser-ticket":
+                    return self.respond(200, browser.ticket(actor))
+                if self.command == "POST" and url.path == "/v1/logout":
+                    browser.logout(self.headers.get("Cookie", ""))
+                    return self.respond(200, {"ok": True}, cookie="agentboard_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
                 result = hub.route(actor, self.command, url.path, parse_qs(url.query), body)
                 self.respond(200, result)
             except NetworkError as exc:
@@ -242,12 +276,20 @@ def make_server(config, address=None):
 
         do_GET = do_POST = handle_request
 
-        def respond(self, status, value):
+        def respond(self, status, value, cookie=None):
             data = json.dumps(value, ensure_ascii=False).encode("utf-8")
+            return self.respond_bytes(status, data, "application/json; charset=utf-8", cookie)
+
+        def respond_bytes(self, status, data, mime, cookie=None):
             self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+            self.send_header("Referrer-Policy", "no-referrer")
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
             self.end_headers()
             try:
                 self.wfile.write(data)

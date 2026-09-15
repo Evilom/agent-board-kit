@@ -34,6 +34,20 @@ class Dagu:
 
     @staticmethod
     def build(task, workspace):
+        if task.get("recipe") != "git.inspect/v1":
+            contract = {key: task[key] for key in ("task_id", "attempt_id", "project_id", "workspace_id", "recipe", "scope", "goal", "constraints", "acceptance")}
+            contract.update({key: workspace[key] for key in ("device_id", "environment_id", "os")})
+            payload = base64.b64encode(json.dumps(contract).encode()).decode()
+            runner = workspace.get("runner") or {}
+            script = "import base64,json,sys\n"
+            if runner:
+                script += "sys.path.insert(0, %r)\n" % runner["package_root"]
+            script += "from board_network.execution import run\nraise SystemExit(run(json.loads(base64.b64decode(%r)), %r))\n" % (payload, runner.get("config_path"))
+            selector = {"board_device": workspace["device_id"], "board_environment": workspace["environment_id"],
+                        "os": {"Darwin": "darwin", "Windows": "windows", "Linux": "linux"}[workspace["os"]]}
+            spec = {"worker_selector": selector, "timeout_sec": 540,
+                    "steps": [{"name": "inspect", "shell": runner.get("python", workspace.get("python", "python3")), "script": script}]}
+            return {"name": task["dag_name"], "dagRunId": task["external_run_id"], "spec": json.dumps(spec)}
         contract = {key: task[key] for key in (
             "task_id", "attempt_id", "project_id", "workspace_id", "expected_commit")}
         contract.update({key: workspace[key] for key in ("device_id", "environment_id", "root", "os")})
@@ -67,7 +81,14 @@ class Dagu:
             return "running", {"backend_status": label, "observed_at": now()}
         if label not in ("succeeded", "success", "failed", "aborted", "cancelled", "rejected"):
             return "unknown", {"backend_status": label, "observed_at": now()}
-        log = request_json(self.endpoint, path + "/steps/inspect/log?stream=stdout&limit=10000")
+        try:
+            log = request_json(self.endpoint, path + "/steps/inspect/log?stream=stdout&limit=10000")
+        except NetworkError:
+            if label in ("failed", "aborted", "cancelled", "rejected"):
+                return "failed", {"backend_status": label, "observed_at": now(), "log_complete": False,
+                                  "receipt": None, "worker_id": run.get("workerId"),
+                                  "errors": [node.get("error") for node in run.get("nodes", []) if node.get("error")]}
+            raise
         if not isinstance(log, dict) or not isinstance(log.get("content"), str):
             raise NetworkError("Dagu returned invalid log evidence", 502)
         content = log.get("content", "")
@@ -84,17 +105,19 @@ class Dagu:
         if len(lines) == 1:
             try:
                 receipt = json.loads(lines[0])
-                expected = {k: task[k] for k in ("task_id", "attempt_id", "project_id", "workspace_id", "expected_commit")}
+                expected = {k: task[k] for k in ("task_id", "attempt_id", "project_id", "workspace_id")}
+                if task["recipe"] == "git.inspect/v1":
+                    expected["expected_commit"] = task["expected_commit"]
                 expected.update(task["target"])
                 identity = all(receipt.get(k) == v for k, v in expected.items() if k != "os")
                 identity = identity and receipt.get("actual_os") == expected["os"]
-                if identity and receipt.get("recipe") == "git.inspect/v1":
+                if identity and receipt.get("recipe") == task["recipe"]:
                     evidence["receipt"] = receipt
             except (ValueError, TypeError, AttributeError):
                 pass
         receipt = evidence["receipt"]
         valid = (receipt is not None and type(receipt.get("exit_code")) is int and receipt["exit_code"] == 0
-                 and receipt.get("actual_commit") == task["expected_commit"]
+                 and (task["recipe"] != "git.inspect/v1" or receipt.get("actual_commit") == task["expected_commit"])
                  and receipt.get("read_only") is True and receipt.get("finished_at")
                  and evidence["log_complete"] and evidence["worker_id"] == task["target"]["device_id"])
         if label in ("succeeded", "success"):

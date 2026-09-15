@@ -2,29 +2,38 @@
 
 [English](README.md) | 简体中文
 
-一个面向 Codex、Claude Code、Cursor、ZCode 等编码 Agent 的本地协作公告板。它使用 JSON/JSONL 和跨进程文件锁记录任务范围、进度、阻塞、留言及交接，不需要服务端、数据库、Node.js 或第三方 Python 包。
+Agent Board 让不同电脑上的 Agent 围绕同一任务协作：明确目标和范围、认领与交接、联系其他 Agent、查询已有知识，最后按真实依据验收。
 
-当前版本 `1.1.1` 提供任务生命周期校验、文件/范围冲突预警、状态备份与修复、结构化状态输出，以及可选的 Git worktree 共享存储。
+**主电脑安装服务端＋客户端，副电脑只安装客户端。** 网络组件 `0.2.0` 提供中文管理界面、Codex / Claude Code 接入、15 个 MCP 工具、持久任务与消息、设备心跳、Dagu 执行和已有知识接口。原本地 Board `1.1.1` 保持兼容。
 
-## 新增：服务端与客户端（预览版）
+## 启动中文客户端
 
-网络组件 `0.1.0` 采用**主电脑安装服务端＋客户端，副电脑只安装客户端**的结构。Board 管项目、权限、任务与验收，Dagu 管执行，知识查询复用原文和既有 QMD 网关。现有本地协议保持兼容。
-
-```bash
-python3 agent_board.py network --config .runtime/config.json init-server --project my-project --device mac-main --root /absolute/path/to/project
-python3 agent_board.py network --config .runtime/config.json runtime-install
-sh scripts/server.sh .runtime/config.json
+```sh
+python3 agent_board.py network --config .runtime/config.json init-server --project my-work --device mac-main --root /你的/工作目录
+python3 agent_board.py network --config .runtime/config.json service
 ```
 
-当前提供 CLI 和服务进程，固定配方为只读 Git 检查。Windows 使用 `scripts/client.ps1` 启动客户端。完整配置、配对、知识权限和断线规则见[服务端与客户端指南](docs/CROSS_DEVICE.zh-CN.md)。安装到已有工程时，加 `--network` 显式启用；普通安装不启动网络服务。
+另开终端：
 
-## 适合什么场景
+```sh
+python3 agent_board.py network --config .runtime/config.json open
+```
 
-- 多个编码 Agent 同时使用一个 Git checkout，开工前需要声明任务与文件范围。
-- 同一个 clone 下有多个 linked worktree，需要共享任务状态。
-- 希望协作记录可本地审计，但不想部署服务、数据库、Web UI 或完整 Agent 编排平台。
+只需 Python 3.9+。普通协作无需 Dagu 或 Git 仓库；设备执行按需使用独立 Dagu 后端。
 
-它只负责协调，不负责创建 Agent、调度模型或执行任务。需要完整多 Agent 编排、跨机器消息总线或可视化控制台时，可以把它与其他系统组合使用。
+- **任务**：目标、范围、约束、逐项验收；原子认领、阻塞、交接、产物和历史。
+- **设备与 Agent**：真实连接状态；本机现有工具通过 MCP 接入，沿用本机登录。
+- **消息**：联系同项目 Agent，区分已送达与已确认。
+- **知识库**：复用已有原文与 QMD 网关，返回来源、当前 SHA256 与可用状态。
+- **执行**：环境检查、目录检查、已授权的 Codex / Claude Code 只读分析；成功退出后仍待人工验收。
+
+Windows 从主分支拉取程序，使用 `scripts/client.ps1`、`scripts/open.ps1` 启动；后续运行 `scripts/update.ps1` 更新源码并备份升级配置。
+
+完整命令与边界见[跨设备使用指南](docs/跨设备使用指南.md)、[升级验收记录](docs/升级验收记录-0.2.md)。Windows 原生实机联调待设备连接后进行。
+
+## 原本地 Board 使用方式
+
+以下安装方式仍用于同一工作目录或 linked worktree 内的轻量协作。只使用本地 CLI 时无需服务端、SQLite、Node.js 或第三方 Python 包。
 
 ## 作为 Agent Skill 安装
 
@@ -127,7 +136,7 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 |---|---|
 | `SKILL.md` | Agent Skill 的触发条件和标准工作流 |
 | `agents/openai.yaml` | Codex 的展示和调用元数据 |
-| `agent_board.py` | 独立 CLI，唯一功能实现 |
+| `agent_board.py` | 原本地 CLI 与网络命令入口 |
 | `install.py` | 目标项目安装与升级 |
 | `schema.json` | 状态、留言和事件协议 |
 | `AGENTS.snippet.md` | 注入目标项目的 Agent 规则 |
@@ -137,12 +146,12 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 
 ```powershell
 cd agent-board-kit
-python -m unittest -v test_agent_board_kit.py
+python -m unittest -v test_agent_board_kit test_board_network test_collaboration test_network_runtime
 ```
 
 ## 版本发布
 
-版本更新遵循语义化版本号。每次版本号升级都会创建 `vX.Y.Z` Git tag，并发布对应的 [GitHub Release](https://github.com/Evilom/agent-board-kit/releases)。
+本地协议与网络组件分别标注版本。已发布的归档见 [GitHub Release](https://github.com/Evilom/agent-board-kit/releases)。
 
 ## License
 

@@ -46,7 +46,7 @@ def init_server(args):
            "coordinator": {"host": "127.0.0.1", "advertise": "127.0.0.1", "port": 51855},
            "projects": {project: {"name": project, "workspaces": {device: workspace}}},
            "principals": {device: {"device_id": device, "token_file": token_path.name,
-                                   "grants": {project: {"operations": ["read", "query", "execute", "accept"], "workspaces": [device]}}}},
+                                   "grants": {project: {"operations": ["read", "query", "execute", "accept", "collaborate"], "workspaces": [device]}}}},
            "knowledge_sources": {"project-docs": {"kind": "documents", "root": root, "projects": [project],
                                                     "prefixes": ["README.md", "README.zh-CN.md", "docs"]}}}
     write_new(path, cfg)
@@ -61,7 +61,7 @@ def pair(args):
     if cfg.get("role") != "server":
         raise NetworkError("pairing requires the server config")
     from .common import validate_url
-    validate_url(args.hub_url)
+    validate_url(args.hub_url, getattr(args, "allow_private_http", False))
     if args.project not in cfg["projects"]:
         raise NetworkError("project must already be registered")
     device, environment, workspace = map(identifier, (args.device, args.environment, args.workspace))
@@ -77,12 +77,12 @@ def pair(args):
         "device_id": device, "environment_id": environment, "os": args.os,
         "root": args.root, "python": "python" if args.os == "Windows" else "python3"}
     cfg["principals"][device] = {"device_id": device, "token_file": str(token), "grants": {
-        args.project: {"operations": ["read", "query", "execute"], "workspaces": [workspace]}}}
+        args.project: {"operations": ["read", "query", "execute", "collaborate"], "workspaces": [workspace]}}}
     # The server's local operator can dispatch to the new, explicitly paired workspace.
     cfg["principals"][cfg["worker"]["device_id"]]["grants"][args.project]["workspaces"].append(workspace)
     Hub(cfg)  # Validate before replacing config; ledger is only opened, never reset.
-    client = {"version": 1, "role": "client", "runtime_dir": "runtime",
-              "hub": {"url": args.hub_url, "token_file": token.name},
+    client = {"version": 1, "role": "client", "runtime_dir": "runtime", "execution_enabled": False,
+              "hub": {"url": args.hub_url, "token_file": token.name, "allow_private_http": getattr(args, "allow_private_http", False)},
               "worker": {"device_id": device, "environment_id": environment, "coordinator": args.coordinator,
                          "peer_insecure": False, "peer_ca_file": "certs/ca.pem", "peer_cert_file": "certs/client.pem",
                          "peer_key_file": "certs/client-key.pem"},
@@ -103,8 +103,8 @@ def pair(args):
 
 
 def parser():
-    p = argparse.ArgumentParser(description="Agent Board optional server/client adapters")
-    p.add_argument("--config", required=True, help="Single local server or client config")
+    p = argparse.ArgumentParser(description="Agent Board：设备、Agent、任务、消息和知识协作")
+    p.add_argument("--config", required=True, help="本设备统一配置文件")
     sub = p.add_subparsers(dest="action", required=True)
     init = sub.add_parser("init-server", help="Create a server + local client configuration")
     init.add_argument("--project", required=True)
@@ -115,6 +115,17 @@ def parser():
     sub.add_parser("runtime-install", help="Download and verify the pinned Dagu binary for this machine")
     sub.add_parser("projects", help="List authorized projects and target workspaces")
     sub.add_parser("doctor", help="Check config, Hub, and Dagu connectivity")
+    sub.add_parser("open", help="在浏览器打开中文客户端，凭据不写入浏览器存储")
+    sub.add_parser("upgrade", help="备份并检查旧版配置与数据库，启用协作权限")
+    sub.add_parser("device", help="运行本设备心跳（由 service 自动管理）")
+    sub.add_parser("devices", help="查看真实设备连接状态")
+    for name in ("mcp", "agent", "connection"):
+        command = sub.add_parser(name, help={"mcp": "现有 Agent 的 MCP stdio 接口", "agent": "启动并接入本机 Codex / Claude Code", "connection": "输出本机 MCP 接入配置"}[name])
+        command.add_argument("--project", required=True)
+        command.add_argument("--workspace", required=True)
+        command.add_argument("--name", required=True, help="本项目内独立的会话名称")
+        command.add_argument("--session", help="恢复原连接的会话编号；只用于本人未结束的任务")
+        command.add_argument("--provider", choices=("codex", "claude", "mcp") if name != "agent" else ("codex", "claude"), default="codex")
     q = sub.add_parser("query", help="Query authorized knowledge with source versions")
     q.add_argument("--project", required=True)
     q.add_argument("text")
@@ -133,10 +144,14 @@ def parser():
     for flag in ("project", "device", "environment", "workspace", "root", "hub-url", "coordinator"):
         enroll.add_argument("--" + flag, required=True)
     enroll.add_argument("--os", choices=("Windows", "Darwin", "Linux"), required=True)
+    enroll.add_argument("--allow-private-http", action="store_true", help="明确允许可信私有网络上的 HTTP 连接")
     return p
 
 
 def main(argv=None):
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     p = parser()
     args = p.parse_args(argv)
     try:
@@ -144,8 +159,33 @@ def main(argv=None):
             result = init_server(args)
         elif args.action == "pair":
             result = pair(args)
+        elif args.action == "upgrade":
+            from .upgrade import upgrade
+            result = upgrade(args.config)
         else:
             cfg = load_config(args.config)
+            if args.action == "device":
+                from .client import device_loop
+                device_loop(cfg, args.config)
+                return 0
+            if args.action == "mcp":
+                from .mcp import serve
+                return serve(cfg, args)
+            if args.action == "agent":
+                from .client import launch
+                return launch(cfg, args.config, args)
+            if args.action == "connection":
+                from .client import connection
+                result = {"mcpServers": {"agent_board": connection(args.config, args.project, args.workspace, args.name, args.provider, args.session)}}
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
+            if args.action == "open":
+                import webbrowser
+                ticket = request_json(cfg["hub"], "/v1/browser-ticket", {})
+                url = cfg["hub"]["url"].rstrip("/") + "/#ticket=" + ticket["ticket"]
+                webbrowser.open(url)
+                print("已打开中文客户端。登录链接仅使用一次，有效期 60 秒。")
+                return 0
             if args.action == "serve":
                 from .hub import make_server
                 with make_server(cfg) as server:
@@ -161,6 +201,8 @@ def main(argv=None):
                 if cfg.get("role") == "server":
                     from .dagu import Dagu
                     result["workers"] = Dagu(cfg["dagu"]).workers()
+            elif args.action == "devices":
+                result = request_json(cfg["hub"], "/v1/devices")
             elif args.action == "projects":
                 result = request_json(cfg["hub"], "/v1/projects")
             elif args.action == "tasks":

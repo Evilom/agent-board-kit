@@ -95,6 +95,9 @@ def install(target_root: Path, force: bool, include_agents: bool, storage: str =
         for source in sorted((KIT_DIR / "board_network").glob("*.py")):
             install_owned_file(source, target_root / "scripts" / "board_network" / source.name,
                                "Portable Agent Board", force)
+        for source in sorted((KIT_DIR / "board_network" / "static").iterdir()):
+            install_owned_file(source, target_root / "scripts" / "board_network" / "static" / source.name,
+                               "Portable Agent Board", force)
     ignore_body = GITIGNORE_BODY
     if network or (target_root / "scripts" / "board_network" / "hub.py").exists():
         ignore_body += "\n# Local server/client configuration, credentials and service data.\n.runtime/"

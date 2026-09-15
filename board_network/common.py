@@ -80,7 +80,7 @@ def ssl_context():
     return context
 
 
-def request_json(endpoint, path, body=None, method=None, max_bytes=4 * 1024 * 1024):
+def request_json(endpoint, path, body=None, method=None, max_bytes=4 * 1024 * 1024, board_errors=False):
     url = endpoint["url"].rstrip("/")
     validate_url(url, endpoint.get("allow_private_http", False))
     headers = {"Accept": "application/json"}
@@ -101,8 +101,16 @@ def request_json(endpoint, path, body=None, method=None, max_bytes=4 * 1024 * 10
     except HTTPError as exc:
         # Do not relay upstream bodies: they may contain internal paths or credentials.
         status = exc.code
+        message = "upstream HTTP %d" % status
+        if board_errors:
+            try:
+                detail = json.loads(exc.read(8192)).get("error")
+                if isinstance(detail, str):
+                    message = detail[:2000]
+            except (ValueError, AttributeError):
+                pass
         exc.close()
-        raise NetworkError("upstream HTTP %d" % status, status) from None
+        raise NetworkError(message, status) from None
     except (URLError, TimeoutError, OSError, ValueError) as exc:
         raise NetworkError("upstream unavailable or invalid response (%s)" % type(exc).__name__, 502) from None
 

@@ -77,12 +77,18 @@ def peer_flags(settings, host):
 
 def commands(config, config_path):
     executable = str(binary_path(config))
-    if not Path(executable).is_file():
-        raise NetworkError("Dagu is not installed; run network runtime-install first")
     jobs = []
+    execution_enabled = config.get("execution_enabled", True) and Path(executable).is_file()
     if config["role"] == "server":
         from .hub import Hub
         Hub(config)  # Fail before launching any processes if grants or storage are invalid.
+        jobs.append(("hub", [sys.executable, "-m", "board_network.cli", "--config", str(Path(config_path).resolve()), "serve"]))
+    elif config["role"] != "client":
+        raise NetworkError("role must be server or client")
+    jobs.append(("device", [sys.executable, "-m", "board_network.cli", "--config", str(Path(config_path).resolve()), "device"]))
+    if not execution_enabled:
+        return jobs
+    if config["role"] == "server":
         api = urlsplit(config["dagu"]["url"])
         if api.scheme != "http" or not loopback(api.hostname):
             raise NetworkError("bundled Dagu API must use loopback HTTP")
@@ -93,9 +99,6 @@ def commands(config, config_path):
                "--coordinator.host=" + coord["host"], "--coordinator.advertise=" + coord["advertise"],
                "--coordinator.port=" + str(coord["port"])] + peer_flags(peer, coord["host"])
         jobs.append(("center", cmd))
-        jobs.append(("hub", [sys.executable, "-m", "board_network.cli", "--config", str(Path(config_path).resolve()), "serve"]))
-    elif config["role"] != "client":
-        raise NetworkError("role must be server or client")
     worker = config["worker"]
     address = worker["coordinator"]
     host = urlsplit("//" + address).hostname
@@ -124,6 +127,7 @@ def service(config, config_path):
             env["DAGU_AUTH_MODE"] = "none"  # API bound to loopback above; Hub authenticates remote callers.
             package_root = str(Path(__file__).resolve().parent.parent)
             env["PYTHONPATH"] = package_root + os.pathsep + env.get("PYTHONPATH", "")
+            env["AGENT_BOARD_CONFIG"] = str(Path(config_path).resolve())
             log = (runtime / (name + ".log")).open("ab")
             logs.append(log)
             children.append((name, subprocess.Popen(cmd, env=env, stdout=log, stderr=log)))

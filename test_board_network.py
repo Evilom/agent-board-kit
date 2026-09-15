@@ -268,14 +268,14 @@ class NetworkTests(unittest.TestCase):
             self.assertEqual(1, inspect(dict(contract, expected_commit="b" * 40)))
             self.assertEqual(1, inspect(dict(contract, os="WrongOS")))
 
-    def test_client_role_starts_only_worker_and_requires_remote_tls(self):
+    def test_client_role_starts_heartbeat_and_worker_and_requires_remote_tls(self):
         runtime = self.root / "runtime"
         (runtime / "bin").mkdir(parents=True)
         (runtime / "bin" / ("dagu.exe" if os.name == "nt" else "dagu")).write_text("binary placeholder")
         cfg = {"role": "client", "runtime_dir": str(runtime), "worker": {
             "device_id": "windows", "environment_id": "windows-native", "coordinator": "127.0.0.1:51855", "peer_insecure": True}}
         jobs = commands(cfg, "client.json")
-        self.assertEqual(["worker"], [name for name, _ in jobs])
+        self.assertEqual(["device", "worker"], [name for name, _ in jobs])
         cfg["worker"]["coordinator"] = "192.168.1.199:51855"
         with self.assertRaisesRegex(NetworkError, "mTLS"):
             commands(cfg, "client.json")

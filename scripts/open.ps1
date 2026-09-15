@@ -1,6 +1,5 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Config)
 $ErrorActionPreference = 'Stop'
 $KitDir = Split-Path -Parent $PSScriptRoot
-# 客户端连接主电脑；设备执行后端可按需开启。
-& python (Join-Path $KitDir 'agent_board.py') network --config $Config service
+& python (Join-Path $KitDir 'agent_board.py') network --config $Config open
 exit $LASTEXITCODE

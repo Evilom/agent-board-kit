@@ -80,7 +80,7 @@ def update_storage_config(target_root: Path, storage: str) -> None:
         stream.write("\n")
 
 
-def install(target_root: Path, force: bool, include_agents: bool, storage: str = "") -> None:
+def install(target_root: Path, force: bool, include_agents: bool, storage: str = "", network: bool = False) -> None:
     target_root = target_root.expanduser().resolve()
     if not target_root.is_dir():
         raise RuntimeError(f"target project does not exist: {target_root}")
@@ -91,7 +91,14 @@ def install(target_root: Path, force: bool, include_agents: bool, storage: str =
     installed_schema = target_root / ".agents" / "board" / "schema.json"
     install_owned_file(KIT_DIR / "agent_board.py", installed_cli, "Portable Agent Board", force)
     install_owned_file(KIT_DIR / "schema.json", installed_schema, "Portable Agent Board protocol", force)
-    update_managed_file(target_root / ".gitignore", GITIGNORE_BODY)
+    if network:
+        for source in sorted((KIT_DIR / "board_network").glob("*.py")):
+            install_owned_file(source, target_root / "scripts" / "board_network" / source.name,
+                               "Portable Agent Board", force)
+    ignore_body = GITIGNORE_BODY
+    if network or (target_root / "scripts" / "board_network" / "hub.py").exists():
+        ignore_body += "\n# Local server/client configuration, credentials and service data.\n.runtime/"
+    update_managed_file(target_root / ".gitignore", ignore_body)
     if include_agents:
         snippet = (KIT_DIR / "AGENTS.snippet.md").read_text(encoding="utf-8")
         update_managed_file(target_root / "AGENTS.md", snippet)
@@ -129,6 +136,7 @@ def main() -> None:
     parser.add_argument("target", help="Target Git project root")
     parser.add_argument("--force", action="store_true", help="Replace conflicting CLI or schema after review")
     parser.add_argument("--no-agents", action="store_true", help="Do not update target AGENTS.md")
+    parser.add_argument("--network", action="store_true", help="Install optional server/client commands; does not share data or start services")
     parser.add_argument(
         "--storage", choices=("checkout", "git-common"), default="",
         help="Persist storage mode; git-common shares one board across linked worktrees",
@@ -140,6 +148,7 @@ def main() -> None:
             force=args.force,
             include_agents=not args.no_agents,
             storage=args.storage,
+            network=args.network,
         )
     except (OSError, RuntimeError) as exc:
         parser.error(str(exc))

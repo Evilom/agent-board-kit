@@ -6,6 +6,18 @@
 
 当前版本 `1.1.1` 提供任务生命周期校验、文件/范围冲突预警、状态备份与修复、结构化状态输出，以及可选的 Git worktree 共享存储。
 
+## 新增：服务端与客户端（预览版）
+
+网络组件 `0.1.0` 采用**主电脑安装服务端＋客户端，副电脑只安装客户端**的结构。Board 管项目、权限、任务与验收，Dagu 管执行，知识查询复用原文和既有 QMD 网关。现有本地协议保持兼容。
+
+```bash
+python3 agent_board.py network --config .runtime/config.json init-server --project my-project --device mac-main --root /absolute/path/to/project
+python3 agent_board.py network --config .runtime/config.json runtime-install
+sh scripts/server.sh .runtime/config.json
+```
+
+当前提供 CLI 和服务进程，固定配方为只读 Git 检查。Windows 使用 `scripts/client.ps1` 启动客户端。完整配置、配对、知识权限和断线规则见[服务端与客户端指南](docs/CROSS_DEVICE.zh-CN.md)。安装到已有工程时，加 `--network` 显式启用；普通安装不启动网络服务。
+
 ## 适合什么场景
 
 - 多个编码 Agent 同时使用一个 Git checkout，开工前需要声明任务与文件范围。
@@ -106,7 +118,7 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 - `state.json` 是当前状态真源；`messages.jsonl` 和 `events.jsonl` 是追加记录。
 - 默认 `checkout` 模式服务于同一工作目录中的多个 Agent 进程。
 - `git-common` 模式服务于同一 clone 的多个 linked worktree，状态保存在 Git common dir，不进入提交。
-- 不同电脑、不同 clone 仍然各自独立；需要跨机器协作时，应由外部服务消费 `events.jsonl`，而不是提交运行态文件。
+- 不同电脑、不同 clone 的本地 Board 仍然各自独立；可选网络组件使用独立的持久执行账本。`events.jsonl` 仅用于观测，不能作为可靠的远程执行队列。
 - 公告板只协调修改范围，不替代 Git diff、测试、代码评审和提交记录。
 
 ## 工具包文件

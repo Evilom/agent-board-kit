@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "role": "server",
+  "database": "board.sqlite3",
+  "runtime_dir": "runtime",
+  "listen": {"host": "127.0.0.1", "port": 8940},
+  "hub": {"url": "http://127.0.0.1:8940", "token_file": "mac-main.token"},
+  "dagu": {"url": "http://127.0.0.1:8188"},
+  "coordinator": {"host": "127.0.0.1", "advertise": "127.0.0.1", "port": 51855},
+  "worker": {"device_id": "mac-main", "environment_id": "mac-native", "coordinator": "127.0.0.1:51855", "peer_insecure": true},
+  "projects": {
+    "my-project": {"name": "My Project", "workspaces": {
+      "mac-main": {"root": "/absolute/path/to/project", "device_id": "mac-main", "environment_id": "mac-native", "os": "Darwin", "python": "python3"}
+    }}
+  },
+  "principals": {
+    "mac-main": {"device_id": "mac-main", "token_file": "mac-main.token", "grants": {
+      "my-project": {"operations": ["read", "query", "execute", "accept"], "workspaces": ["mac-main"]}
+    }}
+  },
+  "knowledge_sources": {
+    "project-docs": {"kind": "documents", "root": "/absolute/path/to/project", "prefixes": ["README.md", "docs"], "projects": ["my-project"]},
+    "existing-qmd": {"kind": "qmd-http", "url": "http://127.0.0.1:8765", "token_file": "/absolute/path/to/existing/qmd.token", "collection": "wiki", "root": "/absolute/path/to/wiki", "prefixes": ["projects/my-project"], "projects": ["my-project"]}
+  }
+}

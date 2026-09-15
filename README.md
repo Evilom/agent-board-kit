@@ -8,6 +8,20 @@ It requires only Python 3.8+. There is no daemon, database, Node.js runtime, or 
 
 Version `1.1.1` provides task lifecycle validation, scope and file conflict warnings, state backup and repair, structured JSON output, and optional shared storage for linked Git worktrees.
 
+## Optional Server / Client Preview
+
+The new `board_network` component (`0.1.0` preview) adds cross-device coordination without changing the v1 local state protocol. The main computer runs the server and a local client; secondary computers run the client only. Dagu handles execution, while Board owns authorization, task IDs, durable evidence and acceptance. Existing document/QMD gateways remain the knowledge source.
+
+```bash
+python3 agent_board.py network --config .runtime/config.json init-server --project my-project --device mac-main --root /path/to/project
+python3 agent_board.py network --config .runtime/config.json runtime-install
+sh scripts/server.sh .runtime/config.json
+```
+
+This preview provides a CLI and supervised services. Its only execution recipe is read-only Git metadata inspection, with native OS and commit checks. It does not transfer source snapshots or run project code. Windows clients use `scripts/client.ps1` with a server-issued pairing configuration. See the [server/client setup guide](docs/CROSS_DEVICE.zh-CN.md) for pairing, transport security, knowledge scopes, recovery and limitations.
+
+Use `python install.py /path/to/project --network` to include network commands in an existing project. Without `--network`, installation and offline workflows remain unchanged.
+
 ## When To Use It
 
 - Several coding agents work in the same Git checkout and need to announce their work before editing files.
@@ -113,7 +127,7 @@ python scripts/agent_board.py compact --done-hours 72 --keep-messages 20
 - `state.json` is the current-state source of truth; `messages.jsonl` and `events.jsonl` are append-only records.
 - `checkout` storage coordinates processes in one working directory.
 - `git-common` storage coordinates linked worktrees from one clone and keeps state outside commits.
-- Separate computers or clones remain independent. For cross-machine coordination, consume `events.jsonl` through an external service instead of committing runtime files.
+- Separate computers or clones keep their local boards independent. The optional network component uses a separate durable ledger; `events.jsonl` is observational and must not be used as a reliable execution queue.
 - The board coordinates ownership; it does not replace Git diffs, tests, reviews, or commit history.
 
 ## Repository Files

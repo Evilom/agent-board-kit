@@ -1051,6 +1051,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Shared agent bulletin board")
     parser.add_argument("--version", action="version", version=f"agent-board-kit {TOOL_VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("network", add_help=False, help="Optional server/client commands (install.py --network)")
 
     status = sub.add_parser("status", help="Show current board")
     status.add_argument("--active", action="store_true", help="Show only active/blocked agents")
@@ -1118,6 +1119,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "network":
+        try:
+            from board_network.cli import main as network_main
+        except ImportError:
+            print("error: optional network component is not installed; rerun install.py with --network", file=sys.stderr)
+            return 2
+        return network_main(sys.argv[2:])
     parser = build_parser()
     args = parser.parse_args()
     try:

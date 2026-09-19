@@ -3,10 +3,10 @@
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const stamp = v => v ? new Date(v).toLocaleString('zh-CN', {hour12:false}) : '尚未连接';
-const names = {ready:'待认领',active:'进行中',blocked:'遇到阻塞',handoff:'等待交接',review:'待验收',done:'已完成',cancelled:'已取消',executing:'设备执行中',queued:'已排队',running:'正在执行',unknown:'待核实',prepared:'等待设备',failed:'执行失败',online:'在线',offline:'离线',idle:'空闲',working:'工作中',passed:'通过',unverified:'未验证'};
+const names = {succeeded:'已执行',uncertain:'需核实结果',expired:'等待已超时',ready:'待认领',active:'进行中',blocked:'遇到阻塞',handoff:'等待交接',review:'待验收',done:'已完成',cancelled:'已取消',executing:'设备执行中',queued:'已排队',running:'正在执行',unknown:'待核实',prepared:'等待设备',failed:'执行失败',online:'在线',offline:'离线',idle:'空闲',working:'工作中',passed:'通过',unverified:'未验证'};
 const badge = status => `<span class="badge ${esc(status)}">${esc(names[status] || status)}</span>`;
 const events = {'work.created':'创建任务','work.claim':'认领任务','work.progress':'更新进度','work.block':'报告阻塞','work.handoff':'发起交接','work.handoff-accept':'接收交接','work.result':'提交结果','work.accept':'验收通过','work.reopen':'退回任务','work.assign':'分配 Agent','work.cancel':'取消任务','execution.reserved':'启动设备能力','execution.finished':'设备返回结果','work.assess':'逐项审核依据'};
-let state = {project:'',page:'bulletins',work:[],agents:[],devices:[],messages:[],bulletins:[],bulletinCursor:null,bulletinExpanded:false,bulletinUnread:0,agentSearch:'',bulletinOnlyUnread:false,filter:'all',search:'',detail:null,me:null,projects:[],capabilities:[]};
+let state = {project:'',page:'resources',resources:[],operations:[],work:[],agents:[],devices:[],messages:[],bulletins:[],bulletinCursor:null,bulletinExpanded:false,bulletinUnread:0,agentSearch:'',bulletinOnlyUnread:false,filter:'all',search:'',detail:null,me:null,projects:[],capabilities:[]};
 let busy = false;
 function randomId(){const a=new Uint8Array(16);crypto.getRandomValues(a);return 'request-'+Array.from(a,x=>x.toString(16).padStart(2,'0')).join('');}
 async function api(path, body, headers={}) {
@@ -42,6 +42,8 @@ async function refresh(){
     const executions=await Promise.allSettled(w.work.filter(t=>t.status==='executing').map(t=>api('/v1/work/'+t.id+'/reconcile',{})));
     for(const r of executions)if(r.status==='fulfilled'){const i=w.work.findIndex(t=>t.id===r.value.id);w.work[i]=r.value;}
     state.work=w.work;state.agents=a.agents;state.devices=d.devices;state.messages=m.messages;
+    const [resources, operations]=await Promise.all([api('/v1/resources'),api('/v1/resource-operations')]);
+    state.resources=resources.resources;state.operations=operations.operations;
     if(state.bulletinExpanded){
       const latest=new Map(b.bulletins.map(item=>[item.id,item]));
       state.bulletins=[...b.bulletins,...state.bulletins.filter(item=>!latest.has(item.id)&&(!state.bulletinOnlyUnread||!item.read_at))];
@@ -52,17 +54,17 @@ async function refresh(){
     $('#message-count').textContent=state.messages.filter(m=>!m.acknowledged_at&&state.agents.some(a=>a.id===m.to_agent_id&&a.principal_id===state.me.principal_id)).length || '';
     $('#bulletin-count').textContent=state.bulletinUnread || '';
     if(!$('#dialog').open && !document.activeElement?.matches('input,textarea,select')) {
-      if(state.detail) await detail(state.detail); else if(state.page!=='knowledge') render();
+      if(state.detail) await detail(state.detail); else if(state.page!=='knowledge'&&(state.page!=='resources'||resourceSignature()!==state.resourceRenderKey)) render();
     }
   }catch(e){$('#connection-state').textContent='连接中断 · 正在重试';$('#connection-state').classList.add('offline');failure(e);}finally{busy=false;}
 }
-const subtitles={bulletins:'共享能力、进展和需要帮助的事情，同项目的各设备都能看到。',tasks:'记录目标、工作范围、进展和验证依据。',devices:'主电脑保存协作记录，每台设备运行自己的客户端。',agents:'了解同项目 Codex 会话的能力、工具与知识范围，需要时直接联系。',messages:'联系同项目的 Agent，跟进消息送达和处理确认。',knowledge:'检索已授权的资料，查看原文来源与当前版本。'};
+const subtitles={resources:'已授权工程、资料与服务在这里连接。直接调用目标设备，无需另一个聊天窗口在线。',bulletins:'共享能力、进展和需要帮助的事情，同项目的各设备都能看到。',tasks:'记录目标、工作范围、进展和验证依据。',devices:'主电脑保存协作记录，每台设备运行自己的客户端。',agents:'了解同项目 Codex 会话的能力、工具与知识范围，需要时直接联系。',messages:'联系同项目的 Agent，跟进消息送达和处理确认。',knowledge:'检索已授权的资料，查看原文来源与当前版本。'};
 function render(){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===state.page));
-  $('#heading').textContent={bulletins:'公告板',tasks:'任务',devices:'设备',agents:'Agent',messages:'消息',knowledge:'知识库'}[state.page];
-  $('#subtitle').textContent=subtitles[state.page];$('#eyebrow').textContent=project()?.name||'协作空间';
+  $('#heading').textContent={resources:'我的设备与工程',bulletins:'公告板',tasks:'任务',devices:'设备',agents:'Agent',messages:'消息',knowledge:'知识库'}[state.page];
+  $('#subtitle').textContent=subtitles[state.page];$('#eyebrow').textContent=state.page==='resources'?'跨设备工作空间':project()?.name||'协作空间';
   $('#header-actions').innerHTML=state.page==='bulletins'&&can('collaborate')?'<button data-action="publish">发布公告</button>':state.page==='tasks'&&can('collaborate')?'<button data-action="create">＋ 创建任务</button>':state.page==='messages'&&can('collaborate')?'<button data-action="message">写消息</button>':state.page==='agents'?'<button data-action="connect">接入 Agent</button>':'';
-  ({bulletins:renderBulletins,tasks:renderTasks,devices:renderDevices,agents:renderAgents,messages:renderMessages,knowledge:renderKnowledge})[state.page]();
+  ({resources:renderResources,bulletins:renderBulletins,tasks:renderTasks,devices:renderDevices,agents:renderAgents,messages:renderMessages,knowledge:renderKnowledge})[state.page]();
 }
 function renderTasks(){
   const active=state.work.filter(w=>['active','executing'].includes(w.status)).length;
@@ -70,6 +72,47 @@ function renderTasks(){
   $('#content').innerHTML=`<div class="stats"><div class="stat"><strong>${active}</strong><span>进行中的任务</span></div><div class="stat"><strong>${attention}</strong><span>需要跟进</span></div><div class="stat"><strong>${state.work.filter(w=>w.status==='done').length}</strong><span>已完成</span></div><div class="stat"><strong>${state.agents.filter(a=>a.online).length}</strong><span>在线 Agent</span></div></div><div class="filters">${[['all','全部'],['ready','待认领'],['active','进行中'],['attention','需跟进'],['done','已完成']].map(([v,l])=>`<button data-filter="${v}" class="${state.filter===v?'selected':''}">${l}</button>`).join('')}<input id="search-task" class="search" placeholder="搜索任务" aria-label="搜索任务" value="${esc(state.search)}"></div><div id="task-list"></div>`;
   taskRows();
   $('#search-task').addEventListener('input',e=>{state.search=e.target.value;taskRows();});
+}
+function resourceSignature(){return JSON.stringify([state.resources.map(r=>[r.id,r.revision,r.online,r.permissions]),state.operations.map(o=>[o.id,o.status,o.finished_at])]);}
+function renderResources(){
+  state.resourceRenderKey=resourceSignature();
+  const online=state.resources.filter(r=>r.online).length;
+  const waiting=state.operations.filter(o=>['queued','running','uncertain'].includes(o.status)).length;
+  $('#content').innerHTML=`<div class="stats"><div class="stat"><strong>${state.resources.length}</strong><span>已接入工程</span></div><div class="stat"><strong>${online}</strong><span>可连接的工程</span></div><div class="stat"><strong>${waiting}</strong><span>进行中或待核实的操作</span></div></div>`+
+    (state.resources.length?`<div class="list">${state.resources.map(r=>`<article class="row resource-row"><div class="row-body"><h3>${esc(r.name)}</h3><p>${esc(r.description||r.project)}</p><small>${esc(r.device_id)} · ${esc(r.root)}</small><small>可用操作：${esc(r.permissions.map(p=>({read:'查阅资料',write:'更新授权文件',run:'调用已配置命令与服务'})[p]).join('、'))}</small><small>共享上下文 ${r.context_files.length} 份 · 本机凭据引用 ${r.credential_refs.length} 项 · 服务接口 ${Object.keys(r.services||{}).length} 项</small>${r.write_prefixes.length?`<small>可更新：${esc(r.write_prefixes.join('、'))}</small>`:''}</div>${badge(r.online?'online':'offline')}<div class="actions">${r.permissions.includes('read')?`<button class="secondary" data-resource-context="${r.id}" ${r.online?'':'disabled'}>读取工程上下文</button>`:''}${r.permissions.includes('run')&&Object.keys(r.commands).length?`<button class="secondary" data-resource-command="${r.id}" ${r.online?'':'disabled'}>运行工程命令</button>`:''}</div></article>`).join('')}</div>`:empty('接入一次，在各设备使用','在工程所在设备登记目录、共享范围和已有配置。设备连接常驻，工程就能被其他已授权设备发现。'))+
+    '<div class="section"><h2>最近的跨设备操作</h2><p class="muted">设备执行后返回结果；连接中断或结果不确定时，请先核实已有操作。</p>'+ (state.operations.length?`<div class="list">${state.operations.slice(0,25).map(o=>`<div class="row"><div class="row-body"><h3>${esc(state.resources.find(r=>r.id===o.resource_id)?.name||o.resource_key)} · ${esc({context:'读取上下文',list:'查看文件',read:'读取文件',write:'更新文件',run:'运行工程命令',request:'调用工程服务',stat:'核对文件',read_chunk:'读取文件内容',upload_begin:'接收文件',upload_chunk:'传输文件',upload_finish:'完成文件传输'}[o.operation]||o.operation)}</h3><small>${esc(o.requester_device)} → ${esc(o.device_id)} · ${stamp(o.created_at)}</small></div>${badge(o.status)}<button class="text-button" data-operation="${o.id}">查看结果</button></div>`).join('')}</div>`:empty('暂无跨设备操作','从工程上下文开始，确认目标工程和可用流程。'))+'</div>';
+}
+function remoteKey(){return 'web-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);}
+async function resourceContext(id){
+  const job=await api('/v1/resource-operations',{request_id:remoteKey(),resource_id:id,operation:'context',arguments:{}});
+  await refresh();await operationDetail(job.id);
+}
+function resourceCommand(id){
+  const r=state.resources.find(r=>r.id===id);
+  modal(r.name+' · 运行工程命令',select('command','使用工程已有流程',Object.entries(r.commands).map(([k,c])=>[k,c.description]))+'<p class="muted">命令在 '+esc(r.device_id)+' 的工程目录执行，凭据在该设备读取。操作结果会保留在下方列表。</p>',async d=>{
+    await api('/v1/resource-operations',{request_id:remoteKey(),resource_id:id,operation:'run',arguments:{command:d.command}});
+  });
+}
+async function operationDetail(id){
+  const operation=await api('/v1/resource-operations/'+id);
+  $('#dialog').dataset.operation=id;
+  $('#dialog-title').textContent='跨设备操作结果';
+  $('#dialog-body').innerHTML=`<p>${badge(operation.status)} ${esc(operation.requester_device)} → ${esc(operation.device_id)}</p>${operationResult(operation)}<details class="operation-record"><summary>操作记录</summary><p class="source">${esc(operation.id)}<br>提交：${stamp(operation.created_at)}<br>返回：${operation.finished_at?stamp(operation.finished_at):'等待设备返回'}</p></details>${['queued','running','uncertain'].includes(operation.status)?`<button class="secondary" data-operation="${esc(id)}">刷新结果</button>`:''}`;
+  if(!$('#dialog').open)$('#dialog').showModal();
+  if(['queued','running'].includes(operation.status))setTimeout(()=>{if($('#dialog').open&&$('#dialog').dataset.operation===id)operationDetail(id).catch(failure);},1000);
+}
+function operationResult(operation){
+  const r=operation.result;
+  if(!r)return '<p>等待目标设备返回结果，当前窗口会自动更新。</p>';
+  if(r.error)return `<p class="body-text">${esc(r.error)}</p>`;
+  if(operation.operation==='context')return `<h3 class="section">${esc(r.name)}</h3><p>${esc(r.description)}</p>`+
+    (r.files||[]).map((f,i)=>`<details class="context-file" ${i===0?'open':''}><summary>${esc(f.path)}${!f.available?' · 暂不可用':f.omitted?' · 内容过长':''}</summary>${f.text!==undefined?`<div class="body-text context-text">${esc(f.text)}</div><details><summary>来源与版本</summary><p class="source">${esc(f.source)}<br>SHA256 ${esc(f.sha256)}</p></details>`:'<p class="muted">可通过工程文件操作进一步核对。</p>'}</details>`).join('')+
+    (Object.keys(r.commands||{}).length?'<h3 class="section">工程命令</h3>'+list(Object.entries(r.commands).map(([name,c])=>name+' · '+c.description)):'')+
+    (Object.keys(r.services||{}).length?'<h3 class="section">已接入服务</h3>'+list(Object.entries(r.services).map(([name,s])=>name+' · '+s.description)):'')+
+    ((r.credential_refs||[]).length?`<p class="muted">复用本机配置：${esc(r.credential_refs.join('、'))}</p>`:'');
+  if(operation.operation==='run')return `<h3 class="section">${esc(r.command)}</h3><p>退出码 ${esc(r.exit_code)}${r.timed_out?' · 执行超时':''}${r.cancelled?' · 执行中断':''}</p><pre>${esc(r.output||'命令没有输出。')}</pre>`;
+  if(r.text!==undefined)return `<h3 class="section">${esc(r.path)}</h3><div class="body-text context-text">${esc(r.text)}</div><p class="source">SHA256 ${esc(r.sha256)}</p>`;
+  return `<pre>${esc(JSON.stringify(r,null,2))}</pre>`;
 }
 function taskRows(){
   const work=state.work.filter(w=>(state.filter==='all'||state.filter===w.status||(state.filter==='attention'&&['review','blocked','handoff'].includes(w.status))||(state.filter==='active'&&w.status==='executing'))&&(w.title+' '+w.goal).toLowerCase().includes(state.search.toLowerCase()));
@@ -101,7 +144,7 @@ function renderMessages(){
 }
 function renderKnowledge(){
   $('#content').innerHTML='<form id="knowledge-form" class="knowledge-form"><input name="query" required placeholder="搜索项目资料和已接入的知识库" aria-label="知识查询"><button>搜索</button></form><div id="knowledge-result">'+empty('知识跟随任务流动','查询返回原文来源、摘要和校验值。可将来源与版本复制到任务消息或结果依据中。')+'</div>';
-  $('#knowledge-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/v1/knowledge/search',{project_id:state.project,query:new FormData(e.target).get('query')});$('#knowledge-result').innerHTML=`<p class="muted">${r.sources.map(s=>`${esc(s.source_id)}：${s.status==='available'?'可用':'暂不可用 · '+esc(s.error)}`).join('　')}</p>`+(r.results.length?r.results.map(r=>`<article class="panel"><h3>${esc(r.title)}</h3><div class="body-text">${esc(r.snippet)}</div><p class="source">${esc(r.uri)} · 第 ${r.line} 行</p><p class="source">${esc(r.version)}</p><p class="source">原文核验：${stamp(r.verified_at)}</p><button class="secondary" data-copy="${esc(r.uri+'\n'+r.version+'\n'+r.snippet)}">复制来源与摘要</button></article>`).join(''):empty('没有匹配的原文','尝试更短的关键词，或检查资料是否在该项目的授权范围内。'));}catch(err){failure(err);}finally{b.disabled=false;}};
+  $('#knowledge-form').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{const r=await api('/v1/shared-knowledge/search',{query:new FormData(e.target).get('query')});$('#knowledge-result').innerHTML=`<p class="muted">${r.sources.map(s=>`${esc(s.source_id)}：${s.status==='available'?'可用':'暂不可用 · '+esc(s.error)}`).join('　')}</p>`+(r.results.length?r.results.map(r=>`<article class="panel"><h3>${esc(r.title)}</h3><div class="body-text">${esc(r.snippet)}</div><p class="source">${esc(r.uri)} · 第 ${r.line} 行</p><p class="source">${esc(r.version)}</p><p class="source">原文核验：${stamp(r.verified_at)}</p><button class="secondary" data-copy="${esc(r.uri+'\n'+r.version+'\n'+r.snippet)}">复制来源与摘要</button></article>`).join(''):empty('没有匹配的原文','尝试更短的关键词，或检查资料是否在该项目的授权范围内。'));}catch(err){failure(err);}finally{b.disabled=false;}};
 }
 async function detail(key){
   const w=await api('/v1/work/'+key);state.detail=key;
@@ -119,6 +162,7 @@ async function detail(key){
   state.current=w;
 }
 function modal(title, html, submit){
+  $('#dialog').dataset.operation='';
   $('#dialog-title').textContent=title;$('#dialog-body').innerHTML=`<form id="action-form">${html}<div class="form-error" hidden></div><div class="actions"><button type="submit">确认</button><button class="secondary" type="button" data-action="close">取消</button></div></form>`;$('#dialog').showModal();
   $('#action-form').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{await submit(Object.fromEntries(new FormData(e.target)));$('#dialog').close();toast('已保存');await refresh();}catch(err){const box=$('.form-error');box.textContent=err.message;box.hidden=false;}finally{button.disabled=false;}};
 }
@@ -146,7 +190,7 @@ async function action(name){
   if(name==='connect') return connectHelp();
   if(name==='publish'){const request_id=randomId();return modal('发布公告',select('category','内容类型',Object.entries(bulletinKinds))+field('title','标题')+field('body','希望大家知道什么','textarea')+'<p class="muted">同项目设备均可阅读。需要单独联系某位同伴时可发送消息。</p>',d=>api('/v1/bulletins',{...d,project_id:state.project,request_id}));}
   if(name==='more-bulletins'){state.bulletinExpanded=true;const b=await api('/v1/bulletins?'+new URLSearchParams({project_id:state.project,before:state.bulletinCursor,unread:state.bulletinOnlyUnread?'1':'0'}));state.bulletins.push(...b.bulletins);state.bulletinCursor=b.next_cursor;return renderBulletins();}
-  if(name==='device-help') {$('#dialog-title').textContent='副电脑接入';$('#dialog-body').innerHTML='<p>1. 主电脑用 <code>network pair</code> 生成独立设备配置与令牌。</p><p>2. Windows 拉取主分支，把配对文件放入 <code>.runtime/</code>。</p><p>3. 运行 <code>scripts/client.ps1 -Config .runtime/client.json</code>。</p><p>4. 运行 <code>scripts/open.ps1 -Config .runtime/client.json</code> 打开同一个协作空间。</p><p class="muted">协作功能只需连接主电脑服务地址；需要设备执行时，再安装 Dagu 并配置执行连接证书。完整命令见 docs/跨设备使用指南.md。</p>';return $('#dialog').showModal();}
+  if(name==='device-help') {$('#dialog').dataset.operation='';$('#dialog-title').textContent='接入另一台设备';$('#dialog-body').innerHTML='<p>1. 将 0.4 安装包解压到设备原有 Agent Board 目录，保留 <code>.runtime</code> 中的配置和配对信息。</p><p>2. 按设备生态使用指南升级配置，并启用 <code>service-install --activate</code>，让设备登录后自动连接。</p><p>3. 在常用应用中登记一次 <code>ecosystem-mcp</code>。之后可直接发现已有工程，无需每次打开另一个 Agent。</p><p>4. 登记本设备需要共享的工程目录、已有知识和凭据引用，设置其他设备可用的操作。</p><p class="muted">新设备先由主电脑完成配对。远程文件、工程命令和服务调用使用内置设备工具；完整命令见 docs/设备生态使用指南.md。</p>';return $('#dialog').showModal();}
   if(name==='message')return openMessage(w?.target_agent_id);
   if(name==='create'){
     const request_id=randomId();
@@ -172,6 +216,9 @@ document.addEventListener('click',async e=>{
     else if(b.dataset.filter){state.filter=b.dataset.filter;renderTasks();}
     else if(b.dataset.work)await detail(b.dataset.work);
     else if(b.dataset.action)await action(b.dataset.action);
+    else if(b.dataset.resourceContext)await resourceContext(b.dataset.resourceContext);
+    else if(b.dataset.resourceCommand)resourceCommand(b.dataset.resourceCommand);
+    else if(b.dataset.operation)await operationDetail(b.dataset.operation);
     else if(b.dataset.profileAgent)profileEditor(b.dataset.profileAgent);
     else if(b.dataset.bulletinFilter){state.bulletinOnlyUnread=b.dataset.bulletinFilter==='unread';state.bulletinExpanded=false;await refresh();renderBulletins();}
     else if(b.dataset.readBulletin){const receipt=await api('/v1/bulletins/'+b.dataset.readBulletin+'/read',{});const item=state.bulletins.find(item=>item.id===b.dataset.readBulletin);if(item)item.read_at=receipt.read_at;await refresh();}

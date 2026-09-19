@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -65,6 +66,16 @@ class AgentClient:
 
     def tools_call(self, name, args):
         body = dict(args)
+        if name == 'board_resources':
+            return self.call('/v1/resources?' + urlencode({'query': body.get('query', '')}))
+        if name == 'board_remote':
+            return self.call('/v1/resource-operations', body)
+        if name == 'board_operation':
+            return self.call('/v1/resource-operations/' + body['operation_id'])
+        if name == 'board_cancel_operation':
+            return self.call('/v1/resource-operations/' + body['operation_id'] + '/cancel', {})
+        if name == 'board_shared_knowledge':
+            return self.call('/v1/shared-knowledge/search', body)
         if name == 'board_status':
             agents = self.call('/v1/agents?' + urlencode({'project_id': self.project}))['agents']
             return {'self': next((a for a in agents if a['id'] == self.agent['id']), self.agent),
@@ -115,19 +126,43 @@ class AgentClient:
         raise NetworkError('未知工具')
 
 
+class DeviceClient(AgentClient):
+    """Shared device tools do not own, start, or impersonate a chat session."""
+    def __init__(self, config):
+        self.config, self.endpoint = config, config['hub']
+
+    def connect(self):
+        return self.call('/v1/me')
+
+    def close(self):
+        pass
+
+
 def device_loop(config, config_path):
+    from .resource_worker import ResourceWorker
+    resources = ResourceWorker(config_path)
+    resource_thread = threading.Thread(target=resources.run, name='resource-tools', daemon=True)
+    resource_thread.start()
+    def stop(signum, frame):
+        resources.stop.set()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, stop)
     worker = config['worker']
-    while True:
+    while not resources.stop.is_set():
         try:
             request_json(config['hub'], '/v1/devices/heartbeat', {
                 'name': config.get('device_name', platform.node()), 'os': platform.system(),
                 'environment_id': worker['environment_id'], 'client_version': VERSION,
                 'tools': [tool for tool in ('codex', 'claude', 'hapi') if agent_executable(config, tool)],
                 'runner': {'python': sys.executable, 'package_root': str(Path(__file__).resolve().parent.parent),
-                           'config_path': str(Path(config_path).resolve())}})
+                           'config_path': str(Path(config_path).resolve())},
+                'resource_status': resources.last_error or 'connected'})
+            resources.announce()
+            resources.pulse()
         except (NetworkError, OSError):
             pass
-        threading.Event().wait(20)
+        resources.stop.wait(20)
+    resource_thread.join(timeout=8)
 
 
 def connection(config_path, project, workspace, name, provider, session=None):

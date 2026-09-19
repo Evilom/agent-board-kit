@@ -8,3 +8,4 @@ dist/
 .agents/board/.lock
 output/playwright/
 .playwright-cli/
+output/validation/

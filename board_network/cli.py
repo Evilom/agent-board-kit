@@ -119,6 +119,29 @@ def parser():
     sub.add_parser("upgrade", help="备份并检查旧版配置与数据库，启用协作权限")
     sub.add_parser("device", help="运行本设备心跳（由 service 自动管理）")
     sub.add_parser("devices", help="查看真实设备连接状态")
+    resources = sub.add_parser('resources', help='发现已授权的全部设备工程')
+    resources.add_argument('--query', default='')
+    add = sub.add_parser('resource-add', help='在本设备统一配置中登记工程；spec 为不含密钥值的 JSON')
+    add.add_argument('--key', required=True)
+    add.add_argument('--spec', required=True)
+    call = sub.add_parser('resource-call', help='在目标设备执行已授权操作并等待真实回执')
+    call.add_argument('--resource', required=True)
+    call.add_argument('--operation', required=True)
+    call.add_argument('--arguments', default='{}', help='JSON 操作参数；内容复杂时使用 --arguments-file')
+    call.add_argument('--arguments-file')
+    call.add_argument('--request-id', required=True)
+    call.add_argument('--wait', type=int, default=30)
+    get = sub.add_parser('resource-result', help='查看已有操作结果，不重复执行')
+    get.add_argument('operation_id')
+    copy = sub.add_parser('resource-copy', help='跨设备分块传输，校验 SHA256；重试沿用 request-id')
+    for field in ('source', 'source-path', 'target', 'target-path', 'request-id'):
+        copy.add_argument('--' + field, required=True)
+    copy.add_argument('--expected-sha256', default='absent')
+    copy.add_argument('--wait', type=int, default=60)
+    startup = sub.add_parser('service-install', help='安装登录自启的轻量设备服务，不启动模型')
+    startup.add_argument('--activate', action='store_true')
+    sub.add_parser('ecosystem-mcp', help='设备级 MCP：跨工程工具，独立于聊天会话，无需 project/name/session')
+    sub.add_parser('ecosystem-connection', help='输出可持久接入的设备级 MCP 配置，不创建聊天 Agent')
     for name in ("mcp", "agent", "connection"):
         command = sub.add_parser(name, help={"mcp": "现有 Agent 的 MCP stdio 接口", "agent": "启动并接入本机 Codex / Claude Code", "connection": "输出本机 MCP 接入配置"}[name])
         command.add_argument("--project", required=True)
@@ -164,11 +187,34 @@ def main(argv=None):
             result = upgrade(args.config)
         else:
             cfg = load_config(args.config)
+            if args.action in ('resource-add', 'resource-call', 'resource-copy', 'service-install', 'resource-result', 'resources'):
+                from .resource_cli import register, invoke, copy_resource
+                if args.action == 'resource-add':
+                    result = register(args.config, args.key, json.loads(Path(args.spec).read_text(encoding='utf-8')))
+                elif args.action == 'resource-call':
+                    data = json.loads(Path(args.arguments_file).read_text(encoding='utf-8')) if args.arguments_file else json.loads(args.arguments)
+                    result = invoke(cfg, args.resource, args.operation, data, args.request_id, args.wait)
+                elif args.action == 'resource-copy':
+                    result = copy_resource(cfg, args.source, args.source_path, args.target, args.target_path, args.expected_sha256, args.request_id, args.wait)
+                elif args.action == 'resource-result':
+                    result = request_json(cfg['hub'], '/v1/resource-operations/' + identifier(args.operation_id), board_errors=True)
+                elif args.action == 'resources':
+                    result = request_json(cfg['hub'], '/v1/resources?query=' + quote(args.query), board_errors=True)
+                else:
+                    from .service_install import install
+                    result = install(args.config, args.activate)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
             if args.action == "device":
                 from .client import device_loop
                 device_loop(cfg, args.config)
                 return 0
-            if args.action == "mcp":
+            if args.action == 'ecosystem-connection':
+                result = {'mcpServers': {'agent_ecosystem': {'command': sys.executable,
+                    'args': [str(Path(__file__).resolve().parent.parent / 'agent_board.py'), 'network', '--config', str(Path(args.config).resolve()), 'ecosystem-mcp']}}}
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
+            if args.action in ('mcp', 'ecosystem-mcp'):
                 from .mcp import serve
                 return serve(cfg, args)
             if args.action == "agent":

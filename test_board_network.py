@@ -175,9 +175,9 @@ class NetworkTests(unittest.TestCase):
         allowed.mkdir()
         file = allowed / "设计.md"
         file.write_text("# 中文资料\n跨设备协作 第一版\n", encoding="utf-8")
-        (docs / "private.md").write_text("跨设备协作 私密")
+        (docs / "private.md").write_text("跨设备协作 私密", encoding="utf-8")
         outside = self.root / "outside.md"
-        outside.write_text("跨设备协作 越界")
+        outside.write_text("跨设备协作 越界", encoding="utf-8")
         (allowed / "escape.md").symlink_to(outside)
         (allowed / "inside-escape.md").symlink_to(docs / "private.md")
         sources = {"docs": {"kind": "documents", "root": str(docs), "prefixes": ["public"], "projects": ["p"]}}
@@ -194,7 +194,7 @@ class NetworkTests(unittest.TestCase):
     def test_qmd_filters_traversal_and_drops_stale_snippet(self):
         docs = self.root / "docs"
         docs.mkdir()
-        (docs / "real.md").write_text("# Current\nnew content 中文检索")
+        (docs / "real.md").write_text("# Current\nnew content 中文检索", encoding="utf-8")
         source = {"q": {"kind": "qmd-http", "root": str(docs), "prefixes": ["real.md"],
                          "projects": ["p"], "collection": "wiki", "url": "http://127.0.0.1:8765"}}
         hits = {"ok": True, "results": [

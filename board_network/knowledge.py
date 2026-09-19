@@ -34,7 +34,7 @@ def source_file(source, relative):
     return path
 
 
-def search(sources, project_id, query, limit):
+def search(sources, project_id, query, limit, path_guard=None):
     results, availability = [], []
     terms = re.findall(r"\w+", query.casefold())
     if not terms:
@@ -72,6 +72,11 @@ def search(sources, project_id, query, limit):
                 path = source_file(source, relative)
                 if path is None or path in seen:
                     continue
+                if path_guard:
+                    try:
+                        path_guard(path)
+                    except (NetworkError, OSError):
+                        continue
                 seen.add(path)
                 before = path.stat()
                 if before.st_size > 2 * 1024 * 1024:

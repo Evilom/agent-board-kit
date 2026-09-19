@@ -139,6 +139,11 @@ def load_config(path):
                 endpoint["token_file"] = resolve(endpoint["token_file"])
     for principal in cfg.get("principals", {}).values():
         principal["token_file"] = resolve(principal["token_file"])
+    for source in cfg.get('credential_refs', {}).values():
+        if source.get('kind') in ('file', 'dotenv'):
+            source['path'] = resolve(source['path'])
+    for resource in cfg.get('resources', {}).values():
+        resource['root'] = resolve(resource['root'])
     for source in cfg.get("knowledge_sources", {}).values():
         source["root"] = resolve(source["root"])
         if source.get("url"):

@@ -157,7 +157,7 @@ class CollaborationTests(unittest.TestCase):
                 cfg=self.root/(device+'.json');cfg.write_text(json.dumps(dict(self.config,hub={'url':url,'token_file':str(self.root/(device+'.token'))})))
                 p=subprocess.Popen([sys.executable,'-m','board_network.cli','--config',str(cfg),'mcp','--project','p','--workspace',device,'--name','live-'+device],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8')
                 processes.append(p);init=rpc(p,1,'initialize',{'protocolVersion':'2025-06-18'});self.assertIn('tools',init['capabilities'])
-                self.assertEqual(len(rpc(p,2,'tools/list')['tools']),21)
+                self.assertEqual(len(rpc(p,2,'tools/list')['tools']),26)
             a,b=processes
             aid=call(a,3,'board_status')['self']['id'];bid=call(b,3,'board_status')['self']['id']
             call(a,20,'board_profile',{'profile':{'summary':'Mac 文档查询','skills':['资料查询'],'tools':['Codex'],

@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from . import VERSION
-from .common import NetworkError, identifier, loopback, now, read_token
+from .common import NetworkError, digest, identifier, loopback, now, read_token
 from .dagu import Dagu
 from .knowledge import search
 from .store import Store
@@ -31,6 +31,8 @@ class Hub:
         self.store = Store(config["database"])
         self.dagu = Dagu(config["dagu"])
         self.collaboration = Collaboration(self)
+        from .resources import Resources
+        self.resources = Resources(self)
 
     def validate(self):
         projects = self.config.get("projects", {})
@@ -174,6 +176,36 @@ class Hub:
         return public_task(task)
 
     def route(self, actor, method, path, query, body):
+        if path.startswith('/v1/resources') or path.startswith('/v1/resource-operations'):
+            return self.resources.route(actor, method, path, query, body)
+        if path == '/v1/shared-knowledge/search' and method == 'POST':
+            text = body.get('query')
+            if set(body) != {'query'} or not isinstance(text, str) or not 1 <= len(text.strip()) <= 500:
+                raise NetworkError('query must be 1-500 characters')
+            results, sources, seen = [], [], set()
+            for project, grant in actor[1].get('grants', {}).items():
+                if 'query' not in grant.get('operations', []):
+                    continue
+                found = search(self.config.get('knowledge_sources', {}), project, text.strip(), 10)
+                sources.extend(dict(s, project_id=project) for s in found.get('sources', []))
+                for item in found['results']:
+                    key = digest([item.get('source_id'), item.get('uri'), item.get('version')])
+                    if key not in seen:
+                        seen.add(key); results.append(item)
+            # Reuse the local device's enrollment, never create another knowledge copy.
+            from .resource_worker import LocalTools
+            local = self.config.get('resources', {})
+            catalog = self.resources.catalog(actor)['resources']
+            for resource in catalog:
+                if resource['device_id'] != self.config.get('worker', {}).get('device_id') or 'read' not in resource['permissions'] or resource['key'] not in local:
+                    continue
+                spec = local[resource['key']]
+                tools = LocalTools(self.config)
+                found = tools.search(spec, text.strip(), resource['key'], resource['project'])
+                results.extend(found['results']); sources.extend(found['sources'])
+            return {'results': results[:20], 'sources': sources,
+                    'remote_resources': [{'id': r['id'], 'name': r['name'], 'online': r['online']} for r in catalog if 'read' in r['permissions'] and r['device_id'] != self.config.get('worker', {}).get('device_id')],
+                    'note': 'Existing sources only. Use resource search for remote device sources; offline sources are not claimed complete.'}
         if method == "GET" and path == "/v1/me":
             return {"principal_id": actor[0], "device_id": actor[1]["device_id"], "version": VERSION}
         if method == "GET" and path == "/v1/projects":
@@ -248,7 +280,7 @@ def make_server(config, address=None):
                     if self.headers.get("Transfer-Encoding"):
                         raise NetworkError("chunked requests are not supported")
                     length = int(self.headers.get("Content-Length", "0"))
-                    maximum = 1500000 if url.path.endswith("/artifacts") else 65536
+                    maximum = 1600000 if url.path.endswith("/artifacts") or url.path.startswith('/v1/resource-operations') or url.path == '/v1/resources/announce' else 65536
                     if not 0 <= length <= maximum:
                         raise NetworkError("请求正文过大", 413)
                     body = json.loads(self.rfile.read(length)) if length else {}

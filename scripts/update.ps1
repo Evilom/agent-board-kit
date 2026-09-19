@@ -11,7 +11,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw '拉取未完成，请解决上方 Git 提示后重试。' }
     & python agent_board.py network --config $Config upgrade
     if ($LASTEXITCODE -ne 0) { throw '配置升级未完成，请保留备份并检查上方错误。' }
-    & python -m unittest test_board_network test_collaboration test_network_runtime test_coordination -q
+    & python -m unittest test_board_network test_collaboration test_network_runtime test_coordination test_ecosystem -q
     if ($LASTEXITCODE -ne 0) { throw '检查未通过，请暂缓启动并保留错误信息。' }
     Write-Host '更新完成。运行 scripts/client.ps1 启动客户端，再运行 scripts/open.ps1 打开中文界面。'
 } finally { Pop-Location }

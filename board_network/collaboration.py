@@ -119,6 +119,8 @@ class Collaboration:
                 "environment_id": identifier(body.get("environment_id")),
                 "client_version": text(body.get("client_version", "unknown"), "客户端版本", 30),
                 "tools": strings(body.get("tools", []), "本机工具"), "last_seen": now()}
+        if body.get('resource_status'):
+            item['resource_status'] = text(body['resource_status'], '资源连接状态', 300)
         if body.get("runner"):
             item["runner"] = {key: text(body["runner"].get(key), "客户端运行路径", 2000) for key in ("python", "package_root", "config_path")}
         with self.store.connect() as db:

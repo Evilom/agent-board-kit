@@ -8,5 +8,5 @@ CONFIG=${1:-.runtime/config.json}
 [ -z "$(git status --porcelain)" ] || { echo '源码存在本地改动，请先保存；更新不会覆盖它们。'; exit 1; }
 git pull --ff-only origin main
 python3 agent_board.py network --config "$CONFIG" upgrade
-python3 -m unittest test_board_network test_collaboration test_network_runtime test_coordination -q
+python3 -m unittest test_board_network test_collaboration test_network_runtime test_coordination test_ecosystem -q
 echo '源码和配置升级完成。请启动 service，然后运行 open 打开客户端。'

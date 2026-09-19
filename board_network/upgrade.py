@@ -4,6 +4,7 @@ import os
 import secrets
 import sqlite3
 from pathlib import Path
+from contextlib import closing
 from .common import NetworkError, load_config
 
 
@@ -12,7 +13,7 @@ def upgrade(config_path):
     raw = path.read_bytes();config=json.loads(raw)
     loaded=load_config(path)
     suffix=secrets.token_hex(4)
-    backup=path.with_name(path.name+'.before-0.2-'+suffix)
+    backup=path.with_name(path.name+'.before-0.4-'+suffix)
     backup.write_bytes(raw);backup.chmod(0o600)
     if backup.read_bytes()!=path.read_bytes():
         raise NetworkError('配置在备份期间发生变化，未应用升级')
@@ -20,13 +21,15 @@ def upgrade(config_path):
     if config['role']=='server':
         source=Path(loaded['database'])
         if source.exists():
-            database_backup=source.with_name(source.stem+'.before-0.2-'+suffix+'.sqlite3')
-            with sqlite3.connect(str(source)) as db, sqlite3.connect(str(database_backup)) as dest:
+            database_backup=source.with_name(source.stem+'.before-0.4-'+suffix+'.sqlite3')
+            with closing(sqlite3.connect(str(source))) as db, closing(sqlite3.connect(str(database_backup))) as dest:
+                db.execute('BEGIN')
                 db.backup(dest)
                 if dest.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                     raise NetworkError('数据库备份未通过完整性检查，未应用升级')
-                for table in ('tasks','audit'):
-                    if db.execute('SELECT count(*) FROM '+table).fetchone()!=dest.execute('SELECT count(*) FROM '+table).fetchone():
+                for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+                    quoted='"'+table.replace('"','""')+'"'
+                    if db.execute('SELECT count(*) FROM '+quoted).fetchone()!=dest.execute('SELECT count(*) FROM '+quoted).fetchone():
                         raise NetworkError('数据库备份记录数量不一致，未应用升级')
             database_backup.chmod(0o600)
         for principal in config['principals'].values():

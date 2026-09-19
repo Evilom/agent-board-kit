@@ -16,6 +16,7 @@ from board_network.execution import run
 from board_network.upgrade import upgrade
 from board_network.client import launch
 from board_network.runtime import commands
+from scripts.package_network import publish_package
 
 
 class RuntimeTests(unittest.TestCase):
@@ -65,7 +66,7 @@ class RuntimeTests(unittest.TestCase):
         result=upgrade(self.path)
         backup=Path(result['database_backup']);self.assertTrue(backup.is_file())
         for path in (backup,Path(self.cfg['database'])):
-            with sqlite3.connect(str(path)) as db:
+            with contextlib.closing(sqlite3.connect(str(path))) as db:
                 self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0],'ok')
                 self.assertIn('保留原始消息',db.execute('SELECT data FROM collab_records').fetchone()[0])
         self.assertIn('collaborate',json.loads(self.path.read_text())['principals']['owner']['grants']['p']['operations'])
@@ -81,5 +82,38 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(any('mcp_servers.agent_board.args=' in x for x in command))
             self.assertNotIn('--dangerously-bypass-approvals-and-sandbox',command)
             self.assertEqual(called.call_args.kwargs['cwd'],str(self.workspace))
+
+    def test_shared_package_publication_verifies_readback_and_preserves_releases(self):
+        archive=self.root/'package.zip';archive.write_bytes(b'original release')
+        share=self.root/'shared';share.mkdir()
+        targets=[{'name':'test-smb','path':str(share),'uri':'smb://server/data/releases'}]
+        manifest={'version':'0.4.0','file':archive.name,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'source_commit':'a'*40,'source_dirty':False}
+        result=publish_package(archive,manifest,targets)
+        self.assertEqual(Path(result[0]['directory']).joinpath('package.zip').read_bytes(),b'original release')
+        self.assertEqual(publish_package(archive,manifest,targets),result)
+        archive.write_bytes(b'changed release')
+        updated=dict(manifest,sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(ValueError,'refusing to overwrite'):
+            publish_package(archive,updated,targets)
+        self.assertEqual(Path(result[0]['directory']).joinpath('package.zip').read_bytes(),b'original release')
+        second=publish_package(archive,dict(updated,source_commit='b'*40),targets)
+        self.assertNotEqual(result[0]['directory'],second[0]['directory'])
+        self.assertEqual(json.loads((share/'latest.json').read_text())['source_commit'],'b'*40)
+
+    def test_shared_package_rejects_dirty_source_bad_hash_and_unavailable_mount(self):
+        archive=self.root/'package.zip';archive.write_bytes(b'release')
+        manifest={'version':'0.4.0','file':archive.name,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'source_commit':'a'*40,'source_dirty':False}
+        target={'name':'missing','path':str(self.root/'unmounted-share')}
+        with self.assertRaisesRegex(ValueError,'not available'):
+            publish_package(archive,manifest,[target])
+        self.assertFalse(Path(target['path']).exists())
+        target['path']=str(self.root)
+        with self.assertRaisesRegex(ValueError,'Commit source'):
+            publish_package(archive,dict(manifest,source_dirty=True),[target])
+        with self.assertRaisesRegex(ValueError,'SHA256'):
+            publish_package(archive,dict(manifest,sha256='0'*64),[target])
+        target['mount']=str(self.workspace)
+        with self.assertRaisesRegex(ValueError,'not available'):
+            publish_package(archive,manifest,[target])
 
 if __name__=='__main__':unittest.main()

@@ -119,6 +119,11 @@ def parser():
     sub.add_parser("upgrade", help="备份并检查旧版配置与数据库，启用协作权限")
     sub.add_parser("device", help="运行本设备心跳（由 service 自动管理）")
     sub.add_parser("devices", help="查看真实设备连接状态")
+    inbox = sub.add_parser('session-inbox', help='在绑定的 Codex 原任务内检查指定工作收件箱；不启动模型、不自动确认')
+    for flag in ('project', 'agent-id', 'session', 'native-thread-id'):
+        inbox.add_argument('--' + flag, required=True)
+    inbox.add_argument('--work-id', action='append', required=True, help='当前用户授权的任务，可重复指定')
+    inbox.add_argument('--receipt-id', action='append', default=[], help='只读核对自己发出的消息回执，可重复指定')
     resources = sub.add_parser('resources', help='发现已授权的全部设备工程')
     resources.add_argument('--query', default='')
     add = sub.add_parser('resource-add', help='在本设备统一配置中登记工程；spec 为不含密钥值的 JSON')
@@ -192,6 +197,12 @@ def main(argv=None):
             result = upgrade(args.config)
         else:
             cfg = load_config(args.config)
+            if args.action == 'session-inbox':
+                from .session_inbox import check_session
+                result = check_session(cfg, args.project, args.agent_id, args.session,
+                                       args.native_thread_id, args.work_id, args.receipt_id)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
             if args.action in ('resource-add', 'resource-call', 'resource-copy', 'service-install', 'resource-result', 'resources'):
                 from .resource_cli import register, invoke, copy_resource
                 if args.action == 'resource-add':

@@ -54,6 +54,12 @@ def definition(config_path, system=None):
 def install(config_path, activate=False):
     path, data = definition(config_path)
     config = load_config(config_path)
+    if activate:
+        from .process_lock import inspect_lock
+        runtime = Path(config['runtime_dir'])
+        if (inspect_lock(runtime / 'resource-operations/worker.lock')['running']
+                and not inspect_lock(runtime / 'service.lock')['running']):
+            raise NetworkError('原独立客户端或旧版服务仍在运行；请先停止它，再启用登录服务。doctor 可查看本机进程所有权。', 409)
     Path(config['runtime_dir']).mkdir(parents=True, exist_ok=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.read_bytes() != data:

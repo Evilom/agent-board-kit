@@ -112,6 +112,13 @@ def commands(config, config_path):
 
 
 def service(config, config_path):
+    from .process_lock import InstanceLock
+    runtime = Path(config['runtime_dir'])
+    with InstanceLock(runtime / 'service.lock', config_path=str(Path(config_path).resolve())):
+        return _service_owned(config, config_path)
+
+
+def _service_owned(config, config_path):
     jobs = commands(config, config_path)
     children, logs = [], []
     runtime = Path(config["runtime_dir"])
@@ -128,9 +135,12 @@ def service(config, config_path):
             package_root = str(Path(__file__).resolve().parent.parent)
             env["PYTHONPATH"] = package_root + os.pathsep + env.get("PYTHONPATH", "")
             env["AGENT_BOARD_CONFIG"] = str(Path(config_path).resolve())
+            if name == 'device':
+                env['AGENT_BOARD_SUPERVISED'] = '1'
             log = (runtime / (name + ".log")).open("ab")
             logs.append(log)
-            children.append((name, subprocess.Popen(cmd, env=env, stdout=log, stderr=log)))
+            children.append((name, subprocess.Popen(cmd, env=env, stdout=log, stderr=log,
+                                                    stdin=subprocess.PIPE if name == 'device' else subprocess.DEVNULL)))
         print("Agent Board %s started; logs: %s" % (config["role"], runtime), flush=True)
         while True:
             for name, child in children:
@@ -139,7 +149,9 @@ def service(config, config_path):
             time.sleep(0.5)
     finally:
         for _, child in reversed(children):
-            if child.poll() is None:
+            if child.stdin:
+                child.stdin.close()
+            elif child.poll() is None:
                 child.terminate()
         for _, child in reversed(children):
             try:

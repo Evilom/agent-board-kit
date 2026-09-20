@@ -123,7 +123,24 @@ class Collaboration:
             item['resource_status'] = text(body['resource_status'], '资源连接状态', 300)
         if body.get("runner"):
             item["runner"] = {key: text(body["runner"].get(key), "客户端运行路径", 2000) for key in ("python", "package_root", "config_path")}
+            if body['runner'].get('runner_id'):
+                item['runner']['runner_id'] = identifier(body['runner']['runner_id'])
+            if type(body['runner'].get('pid')) is int and body['runner']['pid'] > 0:
+                item['runner']['pid'] = body['runner']['pid']
         with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT data FROM collab_records WHERE kind='device' AND id=?", (device_id,)).fetchone()
+            old = json.loads(row[0]) if row else {}
+            runner = item.get('runner', {})
+            connection_id = digest([item['client_version'], runner.get('runner_id'),
+                                    runner.get('package_root'), runner.get('config_path')])
+            connections = [c for c in old.get('connections', []) if fresh(c['last_seen'])]
+            seen = next((c for c in connections if c['id'] == connection_id), None)
+            if not seen:
+                seen = {'id': connection_id, 'first_seen': item['last_seen'], 'version': item['client_version']}
+                connections.append(seen)
+            seen.update(last_seen=item['last_seen'], pid=runner.get('pid'), resource_status=item.get('resource_status'))
+            item['connections'] = sorted(connections, key=lambda c: c['last_seen'], reverse=True)[:6]
             self.put(db, "device", item)
         return item
 
@@ -134,8 +151,18 @@ class Collaboration:
                 allowed.update(ws["device_id"] for ws in self.hub.config["projects"][project].get("workspaces", {}).values())
         with self.store.connect() as db:
             observed = {d["id"]: d for d in self.rows(db, "device")}
-        return {"devices": [dict(observed.get(d, {"id": d, "name": d, "tools": [], "last_seen": None}),
-                                 online=fresh(observed.get(d, {}).get("last_seen"))) for d in sorted(allowed)]}
+        devices = []
+        for key in sorted(allowed):
+            item = dict(observed.get(key, {'id': key, 'name': key, 'tools': [], 'last_seen': None}))
+            item['online'] = fresh(item.get('last_seen'))
+            connections = [c for c in item.get('connections', []) if fresh(c['last_seen'])]
+            item['connections'] = connections
+            # A clean restart has non-overlapping observations. A previous instance
+            # sending another heartbeat after the new one is evidence of overlap.
+            item['connection_conflict'] = any(a['first_seen'] < b['last_seen'] and b['first_seen'] < a['last_seen']
+                                               for i, a in enumerate(connections) for b in connections[i + 1:])
+            devices.append(item)
+        return {'devices': devices}
 
     def register_agent(self, actor, body):
         project = identifier(body.get("project_id"))

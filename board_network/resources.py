@@ -28,6 +28,8 @@ def future(seconds):
 
 def public_job(job, summary=False):
     result = {k: v for k, v in job.items() if k not in ('claim_token', 'arguments', 'receipt_hash')}
+    if job['status'] in TERMINAL:
+        result['result_sha256'] = digest([job['status'], job['result']])
     if summary and isinstance(result.get('result'), dict):
         result['result'] = {k: v for k, v in result['result'].items() if k in
                             ('error', 'code', 'exit_code', 'http_status', 'size', 'sha256', 'timed_out', 'cancelled', 'path')}
@@ -235,6 +237,23 @@ class Resources:
                 result.append(public_job(self._expire(db, job), summary=True))
         return {'operations': result}
 
+    def retrieved(self, actor, key, body):
+        """A requester confirms the exact result it received, never another device's."""
+        with self.store.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = self._expire(db, self._job(db, key))
+            self.authorize(actor, self._resource(db, job['resource_id']), OPERATIONS[job['operation']])
+            if actor[0] != job['requested_by']:
+                raise NetworkError('only the original requester may confirm result retrieval', 403)
+            fingerprint = digest([job['status'], job['result']])
+            if job['status'] not in TERMINAL or set(body) != {'result_sha256'} or body['result_sha256'] != fingerprint:
+                raise NetworkError('retrieval must match the current terminal result', 409)
+            if not job.get('retrieval'):
+                job['retrieval'] = {'at': now(), 'principal': actor[0], 'device_id': actor[1]['device_id'],
+                                    'result_sha256': fingerprint}
+                self._save(db, job, 'resource.retrieved')
+            return public_job(job)
+
     def claim(self, actor, body):
         runner = identifier(body.get('runner_id'))
         device = actor[1]['device_id']
@@ -288,6 +307,8 @@ class Resources:
                 if job.get('receipt_hash') != fingerprint:
                     raise NetworkError('terminal receipt cannot be replaced', 409)
                 return public_job(job)
+            if job.get('retrieval', {}).get('result_sha256') != fingerprint:
+                job.pop('retrieval', None)
             job.update(status=status, result=result, receipt_hash=fingerprint, finished_at=now())
             self._save(db, job, 'resource.' + status)
             return public_job(job)
@@ -315,13 +336,15 @@ class Resources:
             return self.claim(actor, body)
         if path == '/v1/resource-operations/recover' and method == 'GET':
             return self.recover(actor)
-        match = re.fullmatch(r'/v1/resource-operations/([a-zA-Z0-9_.-]+)(?:/(heartbeat|receipt|cancel))?', path)
+        match = re.fullmatch(r'/v1/resource-operations/([a-zA-Z0-9_.-]+)(?:/(heartbeat|receipt|cancel|retrieved))?', path)
         if match:
             key, action = match.groups()
             if method == 'GET' and action is None:
                 return self.get(actor, key)
             if method == 'POST' and action == 'cancel':
                 return self.cancel(actor, key)
+            if method == 'POST' and action == 'retrieved':
+                return self.retrieved(actor, key, body)
             if method == 'POST' and action in ('heartbeat', 'receipt'):
                 return self.receipt(actor, key, action, body)
         raise NetworkError('resource route not found', 404)

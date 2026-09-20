@@ -116,4 +116,18 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'not available'):
             publish_package(archive,manifest,[target])
 
+    def test_doctor_with_disabled_backend_and_legacy_worker_install_guard(self):
+        from board_network.diagnostics import doctor
+        from board_network.process_lock import InstanceLock
+        from board_network.service_install import install
+        from board_network.common import NetworkError
+        with patch('board_network.diagnostics.request_json', return_value={}), patch('board_network.dagu.Dagu') as dagu:
+            result=doctor(dict(self.cfg, execution_enabled=False), self.path)
+            self.assertFalse(result['processes']['resource_worker']['running'])
+            dagu.assert_not_called()
+        with InstanceLock(self.runtime/'resource-operations/worker.lock', purpose='legacy'):
+            with self.assertRaises(NetworkError) as denied:
+                install(self.path, activate=True)
+            self.assertEqual(denied.exception.status, 409)
+
 if __name__=='__main__':unittest.main()

@@ -73,7 +73,7 @@ function renderTasks(){
   taskRows();
   $('#search-task').addEventListener('input',e=>{state.search=e.target.value;taskRows();});
 }
-function resourceSignature(){return JSON.stringify([state.resources.map(r=>[r.id,r.revision,r.online,r.permissions]),state.operations.map(o=>[o.id,o.status,o.finished_at])]);}
+function resourceSignature(){return JSON.stringify([state.resources.map(r=>[r.id,r.revision,r.online,r.permissions]),state.operations.map(o=>[o.id,o.status,o.finished_at,o.retrieval?.at])]);}
 function renderResources(){
   state.resourceRenderKey=resourceSignature();
   const online=state.resources.filter(r=>r.online).length;
@@ -94,10 +94,14 @@ function resourceCommand(id){
   });
 }
 async function operationDetail(id){
-  const operation=await api('/v1/resource-operations/'+id);
+  let operation=await api('/v1/resource-operations/'+id);
+  if(operation.result_sha256&&!operation.retrieval&&operation.requested_by===state.me.principal_id){
+    try{operation=await api('/v1/resource-operations/'+id+'/retrieved',{result_sha256:operation.result_sha256});}
+    catch(e){toast('结果已读取，取回记录尚未保存，可再次打开结果重试。');}
+  }
   $('#dialog').dataset.operation=id;
   $('#dialog-title').textContent='跨设备操作结果';
-  $('#dialog-body').innerHTML=`<p>${badge(operation.status)} ${esc(operation.requester_device)} → ${esc(operation.device_id)}</p>${operationResult(operation)}<details class="operation-record"><summary>操作记录</summary><p class="source">${esc(operation.id)}<br>提交：${stamp(operation.created_at)}<br>返回：${operation.finished_at?stamp(operation.finished_at):'等待设备返回'}</p></details>${['queued','running','uncertain'].includes(operation.status)?`<button class="secondary" data-operation="${esc(id)}">刷新结果</button>`:''}`;
+  $('#dialog-body').innerHTML=`<p>${badge(operation.status)} ${esc(operation.requester_device)} → ${esc(operation.device_id)}</p><p class="muted">${operation.retrieval?'请求端已取回结果 · '+stamp(operation.retrieval.at):'尚无请求端取回结果的记录'}</p>${operationResult(operation)}<details class="operation-record"><summary>操作记录</summary><p class="source">${esc(operation.id)}<br>提交：${stamp(operation.created_at)}<br>返回：${operation.finished_at?stamp(operation.finished_at):'等待设备返回'}</p></details>${['queued','running','uncertain'].includes(operation.status)?`<button class="secondary" data-operation="${esc(id)}">刷新结果</button>`:''}`;
   if(!$('#dialog').open)$('#dialog').showModal();
   if(['queued','running'].includes(operation.status))setTimeout(()=>{if($('#dialog').open&&$('#dialog').dataset.operation===id)operationDetail(id).catch(failure);},1000);
 }
@@ -118,8 +122,15 @@ function taskRows(){
   const work=state.work.filter(w=>(state.filter==='all'||state.filter===w.status||(state.filter==='attention'&&['review','blocked','handoff'].includes(w.status))||(state.filter==='active'&&w.status==='executing'))&&(w.title+' '+w.goal).toLowerCase().includes(state.search.toLowerCase()));
   $('#task-list').innerHTML=work.length?`<div class="list">${work.map(w=>`<div class="row clickable" role="button" tabindex="0" data-work="${w.id}"><div class="row-body"><h3>${esc(w.title)}</h3><small>${esc((w.status==='done'?w.result?.summary:null)||w.blocker||w.progress||w.goal.slice(0,110))}</small><small>${esc(taskOwner(w))} · ${stamp(w.updated_at)}</small></div>${badge(w.status)}<span class="muted">→</span></div>`).join('')}</div>`:empty('从一个明确的目标开始','填写任务目标、范围和验收标准，交给已接入的 Agent，或调用设备能力。');
 }
+function deviceReadiness(d){
+  if(!d.online)return '设备离线，等待重新连接';
+  if(d.connection_conflict)return '检测到多个客户端同时连接，请在该设备检查重复启动';
+  if(d.resource_status==='connected')return state.resources.some(r=>r.device_id===d.id)?'工程连接正常':'已连接，尚未共享本机工程';
+  if((d.resource_status||'').includes('already running'))return '客户端重复启动，需要在该设备停止旧进程后重启';
+  return '工程连接尚未就绪，请检查该设备客户端';
+}
 function renderDevices(){
-  $('#content').innerHTML=`<div class="connection-help"><h3>主电脑：服务端 + 客户端　／　副电脑：客户端</h3><p>设备在线以心跳为准。副电脑接入后，共用这里的任务、消息与授权知识；执行仍发生在目标设备上。</p></div><div class="list">${state.devices.map(d=>`<div class="row"><div class="device-icon">▱</div><div class="row-body"><h3>${esc(d.name)}</h3><small>${esc(d.os||'尚无系统信息')} · ${esc(d.environment_id||d.id)}</small><small>最近连接：${stamp(d.last_seen)} · 客户端 ${esc(d.client_version||'待接入')}</small><small>本机工具：${esc(d.tools.join('、')||'未检测到 Agent 工具')}</small></div>${badge(d.online?'online':'offline')}</div>`).join('')}</div><div class="section"><h3>设备能力</h3><p class="muted">环境检查、目录检查由 Dagu 执行。Codex 只读分析需要目标设备在统一配置中明确开启。设备离线时不会重复派发已经启动的执行。</p><button class="secondary" data-action="device-help">查看副电脑接入步骤</button></div>`;
+  $('#content').innerHTML=`<div class="connection-help"><h3>主电脑：服务端 + 客户端　／　副电脑：客户端</h3><p>设备在线以心跳为准。副电脑接入后，共用这里的任务、消息与授权知识；执行仍发生在目标设备上。</p></div><div class="list">${state.devices.map(d=>`<div class="row"><div class="device-icon">▱</div><div class="row-body"><h3>${esc(d.name)}</h3><small>${esc(d.os||'尚无系统信息')} · ${esc(d.environment_id||d.id)}</small><small>最近连接：${stamp(d.last_seen)} · 客户端 ${esc(d.client_version||'待接入')}</small><small>${esc(deviceReadiness(d))}</small><small>本机工具：${esc(d.tools.join('、')||'未检测到 Agent 工具')}</small></div>${badge(d.online?'online':'offline')}</div>`).join('')}</div><div class="section"><h3>设备能力</h3><p class="muted">已共享的工程可以查阅资料、调用已有命令与服务。可用范围由工程所在设备配置；设备离线或结果不确定时，先核实原操作再继续。</p><button class="secondary" data-action="device-help">查看副电脑接入步骤</button></div>`;
 }
 function renderAgents(){
   $('#content').innerHTML=`<p class="muted">各会话主动介绍自己。能力声明供联系时参考，是否接手由当前会话决定。</p><div class="filters"><input id="agent-search" class="search" placeholder="搜索能力、工具或设备" aria-label="搜索 Agent 能力" value="${esc(state.agentSearch)}"></div><div id="agent-list"></div>`;

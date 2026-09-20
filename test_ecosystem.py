@@ -7,6 +7,7 @@ import os
 import sys
 import subprocess
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,10 +15,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 import test_collaboration as base
-from board_network.common import NetworkError, load_config, request_json
+from board_network.common import NetworkError, digest, load_config, request_json
 from board_network.hub import Hub, make_server
-from board_network.resource_cli import copy_resource, invoke, register
+from board_network.resource_cli import check_ecosystem, copy_resource, invoke, register
 from board_network.resource_worker import LocalTools, ResourceWorker, atomic_json, resource_specs
+from board_network.process_lock import InstanceLock, inspect_lock
 from board_network.service_install import definition
 
 
@@ -340,6 +342,134 @@ class EcosystemTests(unittest.TestCase):
             self.assertEqual((self.site / 'posts/article.md').read_text(encoding='utf-8'), 'preserve later edit')
             # This test uses two authenticated identities on this machine, not a Windows OS claim.
         finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+    def test_result_retrieval_requires_requester_and_exact_terminal_result(self):
+        job = self.execute()
+        self.assertNotIn('retrieval', job)
+        body = {'result_sha256': digest([job['status'], job['result']])}
+        with self.assertRaises(NetworkError) as denied:
+            self.r.retrieved(self.mac, job['id'], body)
+        self.assertEqual(denied.exception.status, 403)
+        with self.assertRaises(NetworkError):
+            self.r.retrieved(self.pc, job['id'], {'result_sha256': '0' * 64})
+        received = self.r.retrieved(self.pc, job['id'], body)
+        self.assertEqual(received['retrieval']['device_id'], 'pc')
+        self.assertEqual(self.r.retrieved(self.pc, job['id'], body)['retrieval'], received['retrieval'])
+        queued = self.submit(key='not-finished')
+        with self.assertRaises(NetworkError):
+            self.r.retrieved(self.pc, queued['id'], {'result_sha256': digest(['queued', None])})
+
+    def test_recovered_result_needs_its_own_retrieval_confirmation(self):
+        self.submit()
+        job = self.r.claim(self.mac, {'runner_id': 'run'})['operation']
+        body = {'claim_token': job['claim_token'], 'status': 'uncertain', 'result': {'error': 'lost connection'}}
+        uncertain = self.r.receipt(self.mac, job['id'], 'receipt', body)
+        old = {'result_sha256': uncertain['result_sha256']}
+        self.r.retrieved(self.pc, job['id'], old)
+        recovered = self.r.receipt(self.mac, job['id'], 'receipt', dict(body, status='succeeded', result={'actual': True}))
+        self.assertNotIn('retrieval', recovered)
+        with self.assertRaises(NetworkError):
+            self.r.retrieved(self.pc, job['id'], old)
+        self.assertIn('retrieval', self.r.retrieved(self.pc, job['id'], {'result_sha256': recovered['result_sha256']}))
+
+    def test_duplicate_worker_waits_then_takes_over_released_lock(self):
+        worker = ResourceWorker(self.config_path)
+        path = worker.journal.parent / 'worker.lock'
+        owner = InstanceLock(path, purpose='test-owner')
+        self.assertTrue(owner.acquire())
+        entered = threading.Event()
+        def run_owned():
+            entered.set()
+            worker.stop.wait(5)
+        with patch.object(worker, '_run_locked', side_effect=run_owned):
+            thread = threading.Thread(target=worker.run); thread.start()
+            try:
+                self.assertFalse(entered.wait(.2))
+                self.assertTrue(thread.is_alive())
+                self.assertFalse(worker.owned.is_set())
+                owner.close()
+                self.assertTrue(entered.wait(3))
+                self.assertTrue(worker.owned.is_set())
+                self.assertTrue(inspect_lock(path)['running'])
+            finally:
+                owner.close(); worker.stop.set(); thread.join(timeout=3)
+        self.assertFalse(inspect_lock(path)['running'])
+        self.assertTrue(path.exists())  # Never unlink and split the lock inode.
+
+    def test_device_tracks_overlapping_clients_without_flagging_clean_restart(self):
+        body = {'name': 'device', 'environment_id': 'native', 'client_version': '0.3.0'}
+        self.c.device_heartbeat(self.mac, body)
+        self.c.device_heartbeat(self.mac, dict(body, client_version='0.4.0'))
+        device = next(d for d in self.c.devices(self.mac)['devices'] if d['id'] == 'mac')
+        self.assertFalse(device['connection_conflict'])
+        self.c.device_heartbeat(self.mac, body)
+        device = next(d for d in self.c.devices(self.mac)['devices'] if d['id'] == 'mac')
+        self.assertTrue(device['connection_conflict'])
+        self.assertEqual({c['version'] for c in device['connections']}, {'0.3.0', '0.4.0'})
+        with self.hub.store.connect() as db:
+            saved = self.c.get(db, 'device', 'mac')
+            for connection in saved['connections']:
+                if connection['version'] == '0.3.0':
+                    connection['last_seen'] = '2000-01-01T00:00:00+00:00'
+            self.c.put(db, 'device', saved)
+        device = next(d for d in self.c.devices(self.mac)['devices'] if d['id'] == 'mac')
+        self.assertFalse(device['connection_conflict'])
+
+    def test_supervisor_single_instance_and_parent_loss_stops_device(self):
+        server = make_server(self.config, ('127.0.0.1', 0))
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        cfg = dict(self.config, role='client', execution_enabled=False,
+                   hub=dict(self.config['hub'], url='http://127.0.0.1:' + str(server.server_address[1])))
+        atomic_json(self.config_path, cfg)
+        argv = [sys.executable, 'agent_board.py', 'network', '--config', str(self.config_path), 'service']
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+        runtime = Path(cfg['runtime_dir'])
+        lock = runtime / 'resource-operations/worker.lock'
+        try:
+            self.assertIn('started', process.stdout.readline())
+            deadline = time.monotonic() + 8
+            while not inspect_lock(lock)['running'] and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertTrue(inspect_lock(lock)['running'])
+            duplicate = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', timeout=8)
+            self.assertEqual(duplicate.returncode, 2)
+            self.assertIn('another local service', duplicate.stderr)
+            process.kill(); process.wait(timeout=5)  # No Python signal handler runs.
+            deadline = time.monotonic() + 8
+            while inspect_lock(lock)['running'] and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertFalse(inspect_lock(lock)['running'])
+            self.assertFalse(inspect_lock(runtime / 'service.lock')['running'])
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            process.communicate(timeout=15)
+            server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+    def test_real_http_probe_records_requester_receipt_without_starting_a_chat(self):
+        server = make_server(self.config, ('127.0.0.1', 0))
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        cfg = dict(self.config, hub=dict(self.config['hub'], url='http://127.0.0.1:' + str(server.server_address[1])))
+        atomic_json(self.config_path, cfg)
+        caller = dict(cfg, hub=dict(cfg['hub'], token_file=str(self.root / 'pc.token')),
+                      worker={'device_id': 'pc'})
+        worker = ResourceWorker(self.config_path)
+        execution = threading.Thread(target=worker.run); execution.start()
+        before = self.c.list_agents(self.mac, 'p')
+        try:
+            report = check_ecosystem(caller, 'MyWeb', 'check', 'stable-probe')
+            self.assertTrue(report['passed']); self.assertTrue(report['cross_device'])
+            self.assertEqual(report['requester_device'], 'pc')
+            self.assertEqual(len(report['operations']), 2)
+            self.assertEqual(report['operations'][1]['result']['exit_code'], 0)
+            self.assertNotIn(self.secret.read_text(encoding='utf-8'), json.dumps(report))
+            self.assertTrue(all(o['retrieval']['device_id'] == 'pc' for o in report['operations']))
+            again = check_ecosystem(caller, 'MyWeb', 'check', 'stable-probe')
+            self.assertEqual([o['id'] for o in report['operations']], [o['id'] for o in again['operations']])
+            self.assertEqual(self.c.list_agents(self.mac, 'p'), before)
+        finally:
+            worker.stop.set(); execution.join(timeout=5)
             server.shutdown(); server.server_close(); thread.join(timeout=3)
 
 

@@ -589,8 +589,9 @@ class ResourceWorker:
         self.runner_id = 'runner-' + uuid.uuid4().hex
         self.journal = Path(self.config['runtime_dir']) / 'resource-operations' / 'receipts'
         self.stop = threading.Event()
+        self.owned = threading.Event()
         self.active = None
-        self.last_error = None
+        self.last_error = 'starting'
 
     def call(self, path, body=None):
         return request_json(dict(self.config['hub'], timeout=10), path, body, board_errors=True)
@@ -648,25 +649,20 @@ class ResourceWorker:
             self.active = None
 
     def run(self):
+        from .process_lock import InstanceLock
         self.journal.mkdir(parents=True, exist_ok=True)
-        lock = (self.journal.parent / 'worker.lock').open('a+b')
+        lock = InstanceLock(self.journal.parent / 'worker.lock',
+                            config_path=str(Path(self.config_path).resolve()), runner_id=self.runner_id)
         try:
-            if os.name == 'nt':
-                import msvcrt
-                if lock.seek(0, 2) == 0:
-                    lock.write(b'0'); lock.flush()
-                lock.seek(0)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            lock.close()
-            self.last_error = 'another local resource worker is already running'
-            return
-        try:
+            while not self.stop.is_set() and not lock.acquire():
+                self.last_error = 'waiting for the existing local resource worker to stop'
+                self.stop.wait(.5)
+            if self.stop.is_set():
+                return
+            self.owned.set()
             self._run_locked()
         finally:
+            self.owned.clear()
             lock.close()
 
     def _run_locked(self):

@@ -3,11 +3,13 @@ import base64
 import hashlib
 import json
 import os
+import platform
 import secrets
+import sys
 import time
 from pathlib import Path
 
-from .common import NetworkError, identifier, load_config, request_json
+from .common import NetworkError, digest, identifier, load_config, now, request_json
 from .resource_worker import CHUNK, resource_specs
 from .resources import TERMINAL
 
@@ -49,13 +51,63 @@ def invoke(config, resource, operation, arguments, request_id, wait=30):
     while job['status'] not in TERMINAL and time.monotonic() < deadline:
         time.sleep(.25)
         job = request_json(endpoint, '/v1/resource-operations/' + job['id'], board_errors=True)
-    return job
+    return confirm_retrieval(endpoint, job)
+
+
+def confirm_retrieval(endpoint, job):
+    if job['status'] not in TERMINAL or job.get('retrieval'):
+        return job
+    try:
+        return request_json(endpoint, '/v1/resource-operations/' + job['id'] + '/retrieved',
+                            {'result_sha256': digest([job['status'], job['result']])}, board_errors=True)
+    except NetworkError as exc:
+        # Preserve a received result even if the acknowledgement is lost or an older
+        # Hub does not support it. A reader on the executing device cannot ack for a peer.
+        return dict(job, retrieval_confirmation={'recorded': False, 'code': exc.status})
 
 
 def require_result(job):
     if job['status'] != 'succeeded':
         raise NetworkError('operation ' + job['id'] + ' is ' + job['status'] + '; inspect this operation before any retry', 409)
     return job['result']
+
+
+def check_ecosystem(config, query, command=None, request_id=None, wait=30):
+    """Run a probe as this actual device; callers opt into a named local command."""
+    from . import VERSION
+    from urllib.parse import urlencode
+    identity = request_json(config['hub'], '/v1/me')
+    if identity['device_id'] != config['worker']['device_id']:
+        raise NetworkError('local device configuration and authenticated identity differ', 409)
+    resources = request_json(config['hub'], '/v1/resources?' + urlencode({'query': query}))['resources']
+    if len(resources) != 1:
+        raise NetworkError('probe needs exactly one authorized resource; use its name or project key', 409)
+    target = resources[0]
+    if not target['online']:
+        raise NetworkError('target resource is offline; no probe operation submitted', 409)
+    request_id = request_id or 'probe-' + secrets.token_hex(12)
+    identifier(request_id)
+    # Bound generated keys independently of the human-facing request id length.
+    prefix = 'probe-' + hashlib.sha256(request_id.encode()).hexdigest()[:48]
+    report = {'checked_at': now(), 'version': VERSION, 'os': platform.system(), 'python': sys.version.split()[0],
+              'requester': identity['principal_id'], 'requester_device': identity['device_id'],
+              'request_id': request_id, 'target_resource': target['id'], 'target_device': target['device_id'],
+              'cross_device': target['device_id'] != identity['device_id'], 'operations': [], 'passed': False}
+    context = invoke(config, target['id'], 'context', {}, prefix + '-context', wait)
+    report['operations'].append({'id': context['id'], 'operation': 'context', 'status': context['status'],
+                                  'retrieval': context.get('retrieval'),
+                                  'files': [{k: v for k, v in f.items() if k != 'text'}
+                                            for f in (context.get('result') or {}).get('files', [])]})
+    if context['status'] != 'succeeded' or not context.get('retrieval'):
+        return report
+    if command:
+        if command not in context['result'].get('commands', {}):
+            raise NetworkError('probe command is not offered by this resource', 403)
+        job = invoke(config, target['id'], 'run', {'command': command}, prefix + '-command', wait)
+        report['operations'].append({'id': job['id'], 'operation': 'run', 'status': job['status'],
+                                     'retrieval': job.get('retrieval'), 'result': job['result']})
+    report['passed'] = all(o['status'] == 'succeeded' and o['retrieval'] for o in report['operations'])
+    return report
 
 
 def copy_resource(config, source, source_path, target, target_path, expected, request_id, wait=60):

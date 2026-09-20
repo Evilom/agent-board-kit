@@ -71,7 +71,8 @@ class AgentClient:
         if name == 'board_remote':
             return self.call('/v1/resource-operations', body)
         if name == 'board_operation':
-            return self.call('/v1/resource-operations/' + body['operation_id'])
+            from .resource_cli import confirm_retrieval
+            return confirm_retrieval(self.endpoint, self.call('/v1/resource-operations/' + body['operation_id']))
         if name == 'board_cancel_operation':
             return self.call('/v1/resource-operations/' + body['operation_id'] + '/cancel', {})
         if name == 'board_shared_knowledge':
@@ -143,26 +144,47 @@ def device_loop(config, config_path):
     resources = ResourceWorker(config_path)
     resource_thread = threading.Thread(target=resources.run, name='resource-tools', daemon=True)
     resource_thread.start()
+    if os.environ.get('AGENT_BOARD_SUPERVISED') == '1':
+        # EOF also occurs when Windows terminates a supervisor without SIGTERM.
+        # Its device child then cancels local work and releases the worker lock.
+        def watch_parent():
+            try:
+                sys.stdin.buffer.read(1)
+            finally:
+                resources.stop.set()
+        threading.Thread(target=watch_parent, name='service-lifetime', daemon=True).start()
     def stop(signum, frame):
         resources.stop.set()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, stop)
+    previous = {s: signal.signal(s, stop) for s in (signal.SIGTERM, signal.SIGINT)}
     worker = config['worker']
-    while not resources.stop.is_set():
-        try:
-            request_json(config['hub'], '/v1/devices/heartbeat', {
-                'name': config.get('device_name', platform.node()), 'os': platform.system(),
-                'environment_id': worker['environment_id'], 'client_version': VERSION,
-                'tools': [tool for tool in ('codex', 'claude', 'hapi') if agent_executable(config, tool)],
-                'runner': {'python': sys.executable, 'package_root': str(Path(__file__).resolve().parent.parent),
-                           'config_path': str(Path(config_path).resolve())},
-                'resource_status': resources.last_error or 'connected'})
-            resources.announce()
-            resources.pulse()
-        except (NetworkError, OSError):
-            pass
-        resources.stop.wait(20)
-    resource_thread.join(timeout=8)
+    try:
+        while not resources.stop.is_set():
+            if not resource_thread.is_alive():
+                raise NetworkError('resource worker stopped; restart the device service', 503)
+            if not resources.owned.wait(.5):
+                continue  # A waiting duplicate must not publish a competing catalog or heartbeat.
+            try:
+                resources.announce()
+                resources.pulse()
+            except (NetworkError, OSError, ValueError):
+                resources.last_error = 'resource connection unavailable; local receipts retained'
+            try:
+                request_json(config['hub'], '/v1/devices/heartbeat', {
+                    'name': config.get('device_name', platform.node()), 'os': platform.system(),
+                    'environment_id': worker['environment_id'], 'client_version': VERSION,
+                    'tools': [tool for tool in ('codex', 'claude', 'hapi') if agent_executable(config, tool)],
+                    'runner': {'python': sys.executable, 'package_root': str(Path(__file__).resolve().parent.parent),
+                               'config_path': str(Path(config_path).resolve()), 'pid': os.getpid(),
+                               'runner_id': resources.runner_id},
+                    'resource_status': resources.last_error or 'connected'})
+            except (NetworkError, OSError):
+                pass
+            resources.stop.wait(20)
+    finally:
+        resources.stop.set()
+        resource_thread.join(timeout=8)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def connection(config_path, project, workspace, name, provider, session=None):

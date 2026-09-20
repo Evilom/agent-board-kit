@@ -114,7 +114,7 @@ def parser():
     sub.add_parser("service", help="Run server + local client, or client only, based on role")
     sub.add_parser("runtime-install", help="Download and verify the pinned Dagu binary for this machine")
     sub.add_parser("projects", help="List authorized projects and target workspaces")
-    sub.add_parser("doctor", help="Check config, Hub, and Dagu connectivity")
+    sub.add_parser("doctor", help="检查设备连接、资源目录与本机服务所有权")
     sub.add_parser("open", help="在浏览器打开中文客户端，凭据不写入浏览器存储")
     sub.add_parser("upgrade", help="备份并检查旧版配置与数据库，启用协作权限")
     sub.add_parser("device", help="运行本设备心跳（由 service 自动管理）")
@@ -142,6 +142,11 @@ def parser():
     startup.add_argument('--activate', action='store_true')
     sub.add_parser('ecosystem-mcp', help='设备级 MCP：跨工程工具，独立于聊天会话，无需 project/name/session')
     sub.add_parser('ecosystem-connection', help='输出可持久接入的设备级 MCP 配置，不创建聊天 Agent')
+    probe = sub.add_parser('ecosystem-check', help='以本设备身份发现工程、读取上下文并确认结果取回')
+    probe.add_argument('--query', required=True, help='唯一工程名称或项目 key')
+    probe.add_argument('--command', help='可选：执行该工程明确提供的固定命令')
+    probe.add_argument('--request-id', help='断线重试沿用同一编号')
+    probe.add_argument('--wait', type=int, default=30)
     for name in ("mcp", "agent", "connection"):
         command = sub.add_parser(name, help={"mcp": "现有 Agent 的 MCP stdio 接口", "agent": "启动并接入本机 Codex / Claude Code", "connection": "输出本机 MCP 接入配置"}[name])
         command.add_argument("--project", required=True)
@@ -197,7 +202,8 @@ def main(argv=None):
                 elif args.action == 'resource-copy':
                     result = copy_resource(cfg, args.source, args.source_path, args.target, args.target_path, args.expected_sha256, args.request_id, args.wait)
                 elif args.action == 'resource-result':
-                    result = request_json(cfg['hub'], '/v1/resource-operations/' + identifier(args.operation_id), board_errors=True)
+                    from .resource_cli import confirm_retrieval
+                    result = confirm_retrieval(cfg['hub'], request_json(cfg['hub'], '/v1/resource-operations/' + identifier(args.operation_id), board_errors=True))
                 elif args.action == 'resources':
                     result = request_json(cfg['hub'], '/v1/resources?query=' + quote(args.query), board_errors=True)
                 else:
@@ -205,6 +211,11 @@ def main(argv=None):
                     result = install(args.config, args.activate)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0
+            if args.action == 'ecosystem-check':
+                from .resource_cli import check_ecosystem
+                result = check_ecosystem(cfg, args.query, args.command, args.request_id, args.wait)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0 if result['passed'] else 1
             if args.action == "device":
                 from .client import device_loop
                 device_loop(cfg, args.config)
@@ -242,11 +253,8 @@ def main(argv=None):
                 from .runtime import install_runtime, service
                 result = install_runtime(cfg) if args.action == "runtime-install" else service(cfg, args.config)
             elif args.action == "doctor":
-                result = {"role": cfg.get("role"), "hub": request_json(cfg["hub"], "/health"),
-                          "authorization": request_json(cfg["hub"], "/v1/projects")}
-                if cfg.get("role") == "server":
-                    from .dagu import Dagu
-                    result["workers"] = Dagu(cfg["dagu"]).workers()
+                from .diagnostics import doctor
+                result = doctor(cfg, args.config)
             elif args.action == "devices":
                 result = request_json(cfg["hub"], "/v1/devices")
             elif args.action == "projects":

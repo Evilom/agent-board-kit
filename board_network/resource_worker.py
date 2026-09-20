@@ -28,6 +28,13 @@ DENIED = {'.git', '.runtime', '.ssh', '.aws', '.azure', '.gnupg', '.secrets', '.
           'credentials.json', 'secrets.json', 'id_rsa', 'id_ed25519', '.npmrc', '.pypirc'}
 
 
+def validate_service_url(url, allow_private_http=False):
+    # Fixed service templates may include pagination queries. The endpoint policy
+    # still checks their origin, credentials and fragment; caller values are quoted.
+    parts = urlsplit(url)
+    validate_url(parts._replace(query='').geturl(), allow_private_http)
+
+
 def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +125,7 @@ def resource_specs(config):
             identifier(name)
             if service.get('method') not in ('GET', 'POST', 'PATCH', 'PUT'):
                 raise NetworkError('unsupported configured service method')
-            validate_url(service['url'].split('{', 1)[0], service.get('allow_private_http', False))
+            validate_service_url(service['url'].split('{', 1)[0], service.get('allow_private_http', False))
             parameters = service.get('parameters', {})
             if not isinstance(parameters, dict) or not all(isinstance(v, str) and len(v) < 200 for v in parameters.values()):
                 raise NetworkError('service parameters require bounded validation patterns')
@@ -245,7 +252,7 @@ class LocalTools:
             value = self.credential(reference)
             values[key] = quote(value, safe=''); used.append(value)
         url = service['url'].format(**values)
-        validate_url(url, service.get('allow_private_http', False))
+        validate_service_url(url, service.get('allow_private_http', False))
         headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
         for key, value in service.get('headers', {}).items():
             if isinstance(value, dict):
@@ -278,7 +285,7 @@ class LocalTools:
         guard = service.get('guard')
         if guard:
             guard_url = guard['url'].format(**values)
-            validate_url(guard_url, service.get('allow_private_http', False))
+            validate_service_url(guard_url, service.get('allow_private_http', False))
             try:
                 with opener.open(Request(guard_url, headers=headers), timeout=20) as response:
                     data = response.read(1024 * 1024 + 1)

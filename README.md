@@ -1,6 +1,6 @@
 # Agent Board Kit
 
-Network 0.4 adds a device-owned project directory, durable remote file/command/API operations, shared context, and references to existing credentials. The device-level MCP entry point works without a peer chat session or a background model. Existing Board APIs and data remain compatible. See the [device ecosystem guide](docs/设备生态使用指南.md) and [validation record](docs/升级验收记录-0.4.md).
+Network 0.4.2 provides a device-owned project directory, durable remote file/command/API operations, shared context, and references to existing credentials. This patch enables fixed service pagination URLs and fixes the Windows process-exit test cleanup. The device-level MCP entry point works without a peer chat session or a background model. Existing Board APIs and data remain compatible. See the [device ecosystem guide](docs/设备生态使用指南.md), [workflow acceptance steps](docs/最后一公里验收.md), and [current validation record](docs/升级验收记录-0.4.2.md).
 
 The web UI uses a neutral dark theme. Devices pull source updates from Git; `scripts/package_network.py --publish` archives committed releases to the SMB destinations in the existing local configuration, with SHA256 readback checks and preserved release history.
 

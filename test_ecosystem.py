@@ -186,6 +186,43 @@ class EcosystemTests(unittest.TestCase):
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=3)
 
+    def test_service_pagination_query_preserves_fixed_origin_and_escaped_cursor(self):
+        from urllib.parse import parse_qs, urlsplit
+        from board_network.common import validate_url
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_GET(self):
+                received.append(self.path)
+                self.send_response(200); self.end_headers()
+                self.wfile.write(json.dumps({'query': parse_qs(urlsplit(self.path).query)}).encode())
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        root = 'http://127.0.0.1:' + str(server.server_address[1])
+        spec = self.config['resources']['myweb']
+        spec['services'] = {'content': {'url': root + '/children?page_size=100&start_cursor={cursor}',
+            'method': 'GET', 'parameters': {'cursor': '.{1,128}'}}}
+        try:
+            resource_specs(self.config)
+            cursor = 'next&redirect=https://other.example/#fragment'
+            result = LocalTools(self.config).service(spec, {'service': 'content', 'parameters': {'cursor': cursor}})
+            self.assertEqual(result['data']['query'], {'page_size': ['100'], 'start_cursor': [cursor]})
+            self.assertEqual(urlsplit(received[0]).path, '/children')
+            self.assertEqual(len(received), 1)
+            for url in (root + '/children?size=100#fragment',
+                        root.replace('://', '://user:password@') + '/children?size=100',
+                        'http://192.0.2.1/children?size=100'):
+                spec['services']['content']['url'] = url
+                with self.subTest(url=url), self.assertRaises(NetworkError):
+                    resource_specs(self.config)
+                with self.subTest(url=url), self.assertRaises(NetworkError):
+                    LocalTools(self.config).service(spec, {'service': 'content', 'parameters': {'cursor': 'next'}})
+            self.assertEqual(len(received), 1)
+            with self.assertRaises(NetworkError):
+                validate_url(root + '?cursor=next')  # Hub endpoint policy is unchanged.
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=3)
+
     def test_command_timeout_and_service_shutdown_stop_execution(self):
         spec = self.config['resources']['myweb']
         spec['commands']['wait'] = {'argv': [sys.executable, '-c', 'import time; print("started", flush=True); time.sleep(60)'], 'timeout': 1}
@@ -426,12 +463,30 @@ class EcosystemTests(unittest.TestCase):
         process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
         runtime = Path(cfg['runtime_dir'])
         lock = runtime / 'resource-operations/worker.lock'
+        device_handle = None
         try:
             self.assertIn('started', process.stdout.readline())
             deadline = time.monotonic() + 8
-            while not inspect_lock(lock)['running'] and time.monotonic() < deadline:
+            ownership = inspect_lock(lock)
+            while not (ownership['running'] and ownership.get('owner')) and time.monotonic() < deadline:
                 time.sleep(.05)
-            self.assertTrue(inspect_lock(lock)['running'])
+                ownership = inspect_lock(lock)
+            self.assertTrue(ownership['running'])
+            self.assertIsNotNone(ownership.get('owner'))
+            if os.name == 'nt':
+                import ctypes
+                from ctypes import wintypes
+                kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+                kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+                kernel32.OpenProcess.restype = wintypes.HANDLE
+                kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                kernel32.WaitForSingleObject.restype = wintypes.DWORD
+                kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                kernel32.CloseHandle.restype = wintypes.BOOL
+                # Hold this exact child before terminating its parent; a PID can be reused.
+                device_handle = kernel32.OpenProcess(0x00100000, False, ownership['owner']['pid'])  # SYNCHRONIZE
+                if not device_handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
             duplicate = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8', timeout=8)
             self.assertEqual(duplicate.returncode, 2)
             self.assertIn('another local service', duplicate.stderr)
@@ -442,10 +497,21 @@ class EcosystemTests(unittest.TestCase):
             self.assertFalse(inspect_lock(lock)['running'])
             self.assertFalse(inspect_lock(runtime / 'service.lock')['running'])
         finally:
-            if process.poll() is None:
-                process.terminate()
-            process.communicate(timeout=15)
-            server.shutdown(); server.server_close(); thread.join(timeout=3)
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                process.communicate(timeout=15)
+                if device_handle:
+                    # Releasing worker.lock precedes interpreter exit and closing device.log.
+                    # Windows cannot remove that log until the actual process has exited.
+                    status = kernel32.WaitForSingleObject(device_handle, 15000)
+                    if status == 0xffffffff:
+                        raise ctypes.WinError(ctypes.get_last_error())
+                    self.assertEqual(status, 0, 'supervised device did not exit after losing its parent')
+            finally:
+                if device_handle:
+                    kernel32.CloseHandle(device_handle)
+                server.shutdown(); server.server_close(); thread.join(timeout=3)
 
     def test_real_http_probe_records_requester_receipt_without_starting_a_chat(self):
         server = make_server(self.config, ('127.0.0.1', 0))

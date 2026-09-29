@@ -4,6 +4,8 @@ Network 0.4.2 provides a device-owned project directory, durable remote file/com
 
 The web UI uses a neutral dark theme. Devices pull source updates from Git; `scripts/package_network.py --publish` archives committed releases to the SMB destinations in the existing local configuration, with SHA256 readback checks and preserved release history.
 
+For intermediate files shared across devices, use an SMB share on the same trusted LAN, or object storage (such as OSS) or a permission-controlled cloud drive across LANs. Record the versioned location and SHA256 in the work item; see [shared file handoff](docs/shared-file-handoff.md).
+
 English | [简体中文](README.zh-CN.md)
 
 Agent Board coordinates agents across computers around shared tasks, messages, handoffs, evidence, and existing knowledge. The main computer runs the server and a local client; secondary computers run clients only.

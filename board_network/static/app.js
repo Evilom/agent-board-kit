@@ -252,7 +252,7 @@ $('#project').onchange=async e=>{state.project=e.target.value;state.bulletinExpa
 $('#logout').onclick=async()=>{await api('/v1/logout',{});localStorage.removeItem('agentboard_human_name');state.me=null;showLogin();};
 $('#human-login-form').onsubmit=async e=>{e.preventDefault();const name=$('#human-name').value.trim();try{await api('/v1/human-session',{name});localStorage.setItem('agentboard_human_name',name);$('#login-error').textContent='';await boot();}catch(err){$('#login-error').textContent=err.message;}};
 $('#login-form').onsubmit=async e=>{e.preventDefault();const token=$('#token').value;$('#token').value='';try{await api('/v1/browser-session',{}, {Authorization:'Bearer '+token});$('#login-error').textContent='';await boot();}catch(err){$('#login-error').textContent=err.message;}};
-boot().catch(e=>{$('#login-error').textContent=e.message;showLogin();});
+boot().catch(e=>{$('#login-error').textContent=e.message==='请先连接服务端'?'':e.message;showLogin();});
 setInterval(refresh,10000);
 
 window.addEventListener('hashchange',()=>{if(new URLSearchParams(location.hash.slice(1)).has('ticket'))boot().catch(failure);});

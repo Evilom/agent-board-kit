@@ -66,6 +66,8 @@ def publish(c, actor, body):
         item = dict(id='bulletin-' + uuid.uuid4().hex, project_id=project, title=title, body=content,
                     category=category, work_id=work_id, from_agent_id=sender['id'] if sender else None,
                     from_principal=actor[0], created_at=now())
+        if actor[1].get('kind') == 'human':
+            item['from_name'] = actor[1]['display_name']
         c.put(db, 'bulletin', item)
         c.event(db, actor, item, 'bulletin.published')
         return item

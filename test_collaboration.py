@@ -185,4 +185,49 @@ class CollaborationTests(unittest.TestCase):
                 p.stdin.close();p.wait(timeout=15);p.stdout.close();p.stderr.close()
             server.shutdown();server.server_close();thread.join()
 
+    def test_lan_name_session_can_publish_but_cannot_control_devices(self):
+        self.config['human_access'] = {'enabled': True, 'project_id': 'p', 'allowed_networks': ['127.0.0.0/8']}
+        server = make_server(self.config, ('127.0.0.1', 0))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        url = 'http://127.0.0.1:' + str(server.server_address[1])
+        try:
+            def call(path, body=None, cookie=None, origin=None):
+                headers = {'Cookie': cookie} if cookie else {}
+                if origin:
+                    headers['Origin'] = origin
+                if body is not None:
+                    headers['Content-Type'] = 'application/json'
+                req = Request(url + path, data=json.dumps(body).encode() if body is not None else None, headers=headers)
+                with urlopen(req) as response:
+                    return json.load(response), response.headers.get('Set-Cookie')
+
+            _, header = call('/v1/human-session', {'name': '  工作室同事  '}, origin=url)
+            cookie = header.split(';')[0]
+            self.assertIn('HttpOnly', header)
+            me, _ = call('/v1/me', cookie=cookie)
+            self.assertEqual((me['kind'], me['display_name']), ('human', '工作室同事'))
+            bulletin, _ = call('/v1/bulletins', {'project_id': 'p', 'request_id': 'human-note',
+                                'title': '协作公告', 'body': '请查看任务'}, cookie, url)
+            self.assertEqual(bulletin['from_name'], '工作室同事')
+            work_body = {'project_id': 'p', 'request_id': 'human-work', 'title': '请整理资料',
+                         'goal': '让下一台设备接手', 'scope': ['.'], 'constraints': [], 'acceptance': ['有来源']}
+            work, _ = call('/v1/work', work_body, cookie, url)
+            self.assertEqual(work['created_by_name'], '工作室同事')
+            listed, _ = call('/v1/work?project_id=p', cookie=cookie)
+            self.assertIn(work['id'], [item['id'] for item in listed['work']])
+            for path, body in [('/v1/work/' + work['id'] + '/claim', {}), ('/v1/devices', None),
+                               ('/v1/resources', None), ('/v1/messages?project_id=p', None),
+                               ('/v1/work', dict(work_body, request_id='assigned', target_agent_id=self.a['id']))]:
+                with self.assertRaises(HTTPError) as caught:
+                    call(path, body, cookie, url)
+                self.assertEqual(caught.exception.code, 403)
+                caught.exception.close()
+            with self.assertRaises(HTTPError) as caught:
+                call('/v1/human-session', {'name': '冒名'}, origin='http://evil.invalid')
+            self.assertEqual(caught.exception.code, 403)
+            caught.exception.close()
+        finally:
+            server.shutdown();server.server_close();thread.join()
+
 if __name__=='__main__':unittest.main()

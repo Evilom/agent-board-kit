@@ -81,6 +81,8 @@ class Collaboration:
 
     def event(self, db, actor, item, event, details=None):
         data = {"time": now(), "actor": actor[0], "type": event, "details": details or {}}
+        if actor[1].get('kind') == 'human':
+            data['actor_name'] = actor[1]['display_name']
         db.execute("INSERT INTO collab_events(project,subject,data) VALUES(?,?,?)",
                    (item["project_id"], item["id"], encoded(data).decode()))
 
@@ -224,11 +226,15 @@ class Collaboration:
         allowed = {"project_id", "request_id", "title", "goal", "scope", "constraints", "acceptance", "target_agent_id"}
         if set(body) - allowed:
             raise NetworkError("任务包含未知字段")
+        if actor[1].get('kind') == 'human' and body.get('target_agent_id'):
+            raise NetworkError('姓名入口不能分配 Agent', 403)
         template = {"project_id": project, "title": text(body.get("title"), "任务名称", 200),
                     "goal": text(body.get("goal"), "目标"), "scope": scopes(body.get("scope", ["."])),
                     "constraints": strings(body.get("constraints", []), "约束"),
                     "acceptance": strings(body.get("acceptance", []), "验收标准"),
                     "created_by": actor[0], "target_agent_id": body.get("target_agent_id") or None}
+        if actor[1].get('kind') == 'human':
+            template['created_by_name'] = actor[1]['display_name']
         if not template["acceptance"]:
             raise NetworkError("请至少填写一条验收标准")
         def create(db):

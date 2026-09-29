@@ -40,4 +40,5 @@ summary{cursor:pointer;font-size:13px;line-height:1.7}
 #dialog-body ul{font-size:13px;line-height:1.8;padding-left:20px}
 .badge.succeeded{background:var(--success-bg);color:var(--success-text)}
 .badge.uncertain,.badge.expired{background:var(--warning-bg);color:var(--warning-text)}
+.human [data-action="message"],.human [data-action="reconcile"],.human [data-action="dispatch-retry"],.human [data-message-agent]{display:none}
 @media(max-width:600px){.resource-row{flex-wrap:wrap;align-items:flex-start}.resource-row .row-body{flex-basis:75%}.resource-row .actions{flex-direction:row;flex-basis:100%}.resource-row .actions button{flex:1}.stats{flex-wrap:wrap}.context-text{max-height:45vh}}

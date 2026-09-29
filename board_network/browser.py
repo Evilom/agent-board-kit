@@ -21,8 +21,17 @@ class BrowserAccess:
     def cleanup(self):
         for records in (self.tickets, self.sessions):
             for key, value in list(records.items()):
-                if value[2] <= time.time():
+                if value[-1] <= time.time():
                     records.pop(key, None)
+
+    def human_session(self, name):
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40 or any(ord(c) < 32 or ord(c) == 127 for c in name):
+            raise NetworkError('请输入 1–40 字的称呼')
+        key = secrets.token_urlsafe(32)
+        with self.lock:
+            self.cleanup()
+            self.sessions[key] = ('human', 'human-' + secrets.token_hex(16), name.strip(), time.time() + 8 * 3600)
+        return key
 
     def ticket(self, actor):
         with self.lock:
@@ -63,6 +72,11 @@ class BrowserAccess:
             grant = self.sessions.get(key)
         if not grant:
             raise NetworkError('请先连接服务端', 401)
+        if len(grant) == 4 and grant[0] == 'human':
+            access = self.hub.config['human_access']
+            project = access['project_id']
+            return grant[1], {'kind': 'human', 'device_id': 'browser', 'display_name': grant[2],
+                              'grants': {project: {'operations': ['read', 'query', 'collaborate'], 'workspaces': []}}}
         return self.actor(grant)
 
     def logout(self, cookie):

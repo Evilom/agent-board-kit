@@ -1,4 +1,4 @@
-/* Portable Agent Board: no credential persistence, no third-party scripts. */
+/* Portable Agent Board: device credentials are never persisted; names are local display labels. */
 'use strict';
 const $ = (s) => document.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -24,13 +24,21 @@ const list = values => `<ul>${values.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>
 function empty(title, text, button=''){return `<div class="empty"><h3>${esc(title)}</h3><p>${esc(text)}</p>${button}</div>`;}
 function project(){return state.projects.find(p=>p.project_id===state.project);}
 function can(operation){return project()?.operations.includes(operation);}
+function human(){return state.me?.kind==='human';}
 async function boot(){
   const ticket = new URLSearchParams(location.hash.slice(1)).get('ticket');
   if(ticket){history.replaceState(null,'',location.pathname);await api('/v1/browser-session',{ticket});}
-  state.me=await api('/v1/me');state.projects=(await api('/v1/projects')).projects;
-  state.capabilities=(await api('/v1/capabilities')).capabilities;
+  try{state.me=await api('/v1/me');}catch(err){
+    const name=!ticket&&localStorage.getItem('agentboard_human_name');
+    if(!name)throw err;
+    await api('/v1/human-session',{name});state.me=await api('/v1/me');
+  }
+  state.projects=(await api('/v1/projects')).projects;
+  state.capabilities=human()?[]:(await api('/v1/capabilities')).capabilities;
   $('#project').innerHTML=state.projects.map(p=>`<option value="${esc(p.project_id)}">${esc(p.name)}</option>`).join('');
-  state.project=state.projects[0]?.project_id || '';state.bulletinExpanded=false;$('#identity').textContent=`${state.me.device_id} · v${state.me.version}`;
+  state.project=state.projects[0]?.project_id || '';state.bulletinExpanded=false;state.page=human()?'bulletins':'resources';$('#identity').textContent=human()?`${state.me.display_name} · 工作室成员`:`${state.me.device_id} · v${state.me.version}`;
+  document.body.classList.toggle('human',human());
+  document.querySelectorAll('nav button').forEach(b=>b.style.display=human()&&!['bulletins','tasks','knowledge'].includes(b.dataset.page)?'none':'');
   $('#login').hidden=true;$('#shell').hidden=false;
   await refresh();
 }
@@ -38,11 +46,11 @@ async function refresh(){
   if(busy || !state.me || $('#shell').hidden) return;busy=true;
   try{
     const q='?project_id='+encodeURIComponent(state.project);
-    const [w,a,d,m,b]=await Promise.all([api('/v1/work'+q),api('/v1/agents'+q),api('/v1/devices'),api('/v1/messages'+q),api('/v1/bulletins'+q+'&unread='+(state.bulletinOnlyUnread?'1':'0'))]);
-    const executions=await Promise.allSettled(w.work.filter(t=>t.status==='executing').map(t=>api('/v1/work/'+t.id+'/reconcile',{})));
+    const [w,a,d,m,b]=await Promise.all([api('/v1/work'+q),api('/v1/agents'+q),human()?Promise.resolve({devices:[]}):api('/v1/devices'),human()?Promise.resolve({messages:[]}):api('/v1/messages'+q),api('/v1/bulletins'+q+'&unread='+(state.bulletinOnlyUnread?'1':'0'))]);
+    const executions=human()?[]:await Promise.allSettled(w.work.filter(t=>t.status==='executing').map(t=>api('/v1/work/'+t.id+'/reconcile',{})));
     for(const r of executions)if(r.status==='fulfilled'){const i=w.work.findIndex(t=>t.id===r.value.id);w.work[i]=r.value;}
     state.work=w.work;state.agents=a.agents;state.devices=d.devices;state.messages=m.messages;
-    const [resources, operations]=await Promise.all([api('/v1/resources'),api('/v1/resource-operations')]);
+    const [resources, operations]=human()?[{resources:[]},{operations:[]}]:await Promise.all([api('/v1/resources'),api('/v1/resource-operations')]);
     state.resources=resources.resources;state.operations=operations.operations;
     if(state.bulletinExpanded){
       const latest=new Map(b.bulletins.map(item=>[item.id,item]));
@@ -147,7 +155,7 @@ function profileEditor(key){
 const bulletinKinds={info:'共享信息',capability:'能力介绍',help:'寻求帮助',update:'进展更新'};
 function renderBulletins(){
   const items=state.bulletins;
-  $('#content').innerHTML=`<div class="filters"><button data-bulletin-filter="all" class="${!state.bulletinOnlyUnread?'selected':''}">全部公告</button><button data-bulletin-filter="unread" class="${state.bulletinOnlyUnread?'selected':''}">未读 ${state.bulletinUnread}</button></div>`+(items.length?`<div class="panel">${items.map(b=>`<article class="message"><div class="message-head"><span>${esc(bulletinKinds[b.category])} · ${esc(b.from_agent_id?agentName(b.from_agent_id):b.from_principal)}</span><span>${stamp(b.created_at)}</span></div><h3>${esc(b.title)} ${!b.read_at?'<span class="badge review">未读</span>':''}</h3><div class="body-text">${esc(b.body)}</div>${b.work_id?`<p><button class="text-button" data-work="${b.work_id}">查看关联任务</button></p>`:''}<div class="actions section">${!b.read_at?`<button class="text-button" data-read-bulletin="${b.id}">标为我已读</button>`:'<span class="muted">我已读</span>'}${b.from_agent_id&&can('collaborate')?`<button class="text-button" data-message-agent="${b.from_agent_id}">联系发布者</button>`:''}</div></article>`).join('')}</div>`:empty(state.bulletinOnlyUnread?'公告都已读':'还没有公告','把希望大家知道的能力、资料或进展写在这里。'))+(state.bulletinCursor?'<button class="secondary" data-action="more-bulletins">加载更早公告</button>':'');
+  $('#content').innerHTML=`<div class="filters"><button data-bulletin-filter="all" class="${!state.bulletinOnlyUnread?'selected':''}">全部公告</button><button data-bulletin-filter="unread" class="${state.bulletinOnlyUnread?'selected':''}">未读 ${state.bulletinUnread}</button></div>`+(items.length?`<div class="panel">${items.map(b=>`<article class="message"><div class="message-head"><span>${esc(bulletinKinds[b.category])} · ${esc(b.from_agent_id?agentName(b.from_agent_id):b.from_name||b.from_principal)}</span><span>${stamp(b.created_at)}</span></div><h3>${esc(b.title)} ${!b.read_at?'<span class="badge review">未读</span>':''}</h3><div class="body-text">${esc(b.body)}</div>${b.work_id?`<p><button class="text-button" data-work="${b.work_id}">查看关联任务</button></p>`:''}<div class="actions section">${!b.read_at?`<button class="text-button" data-read-bulletin="${b.id}">标为我已读</button>`:'<span class="muted">我已读</span>'}${!human()&&b.from_agent_id&&can('collaborate')?`<button class="text-button" data-message-agent="${b.from_agent_id}">联系发布者</button>`:''}</div></article>`).join('')}</div>`:empty(state.bulletinOnlyUnread?'公告都已读':'还没有公告','把希望大家知道的能力、资料或进展写在这里。'))+(state.bulletinCursor?'<button class="secondary" data-action="more-bulletins">加载更早公告</button>':'');
 }
 function messageRows(messages){return messages.map(m=>`<div class="message"><div class="message-head"><span>${esc(m.from_agent_id?agentName(m.from_agent_id):m.from_principal)} → ${esc(agentName(m.to_agent_id))}</span><span>${stamp(m.created_at)}</span></div><div class="body-text">${esc(m.body)}</div><p class="muted">${m.acknowledged_at?'已确认 · '+stamp(m.acknowledged_at):m.delivered_at?'已送达，等待处理确认':'等待接收方读取'}${m.work_id?' · 任务消息':''}</p></div>`).join('');}
 function renderMessages(){
@@ -164,7 +172,7 @@ async function detail(key){
   const local=state.agents.filter(a=>a.principal_id===state.me.principal_id&&a.online);
   $('#heading').textContent='任务详情';$('#subtitle').textContent='目标、执行与交接记录保存在同一条任务中。';$('#header-actions').innerHTML='';
   let actions='';
-  if(w.status==='ready'&&can('collaborate')) actions+='<button data-action="claim">认领任务</button><button class="secondary" data-action="assign">分配 Agent</button>'+(can('execute')?'<button class="secondary" data-action="run">调用设备能力</button>':'');
+  if(w.status==='ready'&&can('collaborate')&&!human()) actions+='<button data-action="claim">认领任务</button><button class="secondary" data-action="assign">分配 Agent</button>'+(can('execute')?'<button class="secondary" data-action="run">调用设备能力</button>':'');
   if(mine&&['active','blocked'].includes(w.status)) actions+='<button data-action="progress">汇报进度</button><button class="secondary" data-action="handoff">交接任务</button><button class="secondary" data-action="block">报告阻塞</button><button class="secondary" data-action="result">提交结果</button>';
   if(w.status==='handoff'&&local.some(a=>a.id===w.handoff.to_agent_id)) actions+='<button data-action="receive">确认接收交接</button>';
   if(w.status==='review'&&can('accept')) actions+=(w.result?.kind==='device-execution'?'<button class="secondary" data-action="assess">逐项审核</button>':'')+'<button data-action="accept">验收通过</button><button class="secondary" data-action="reopen">退回补充</button>';
@@ -205,7 +213,7 @@ async function action(name){
   if(name==='message')return openMessage(w?.target_agent_id);
   if(name==='create'){
     const request_id=randomId();
-    return modal('创建协作任务',field('title','任务名称')+field('goal','要达成什么目标','textarea')+field('scope','工作区内范围 · 每行一项','textarea','.')+field('constraints','必须遵守的约束 · 每行一项','textarea','',false)+field('acceptance','怎样算完成 · 每行一项','textarea')+select('target_agent_id','分配给',state.agents.map(a=>[a.id,a.name+' · '+a.device_id]),true),d=>api('/v1/work',{...d,scope:lines(d.scope),constraints:lines(d.constraints),acceptance:lines(d.acceptance),project_id:state.project,request_id}));
+    return modal('创建协作任务',field('title','任务名称')+field('goal','要达成什么目标','textarea')+field('scope','工作区内范围 · 每行一项','textarea','.')+field('constraints','必须遵守的约束 · 每行一项','textarea','',false)+field('acceptance','怎样算完成 · 每行一项','textarea')+(human()?'':select('target_agent_id','分配给',state.agents.map(a=>[a.id,a.name+' · '+a.device_id]),true)),d=>api('/v1/work',{...d,scope:lines(d.scope),constraints:lines(d.constraints),acceptance:lines(d.acceptance),project_id:state.project,request_id}));
   }
   if(name==='reconcile'){await api('/v1/work/'+w.id+'/reconcile',{});return detail(w.id);}
   if(name==='dispatch-retry'){await api('/v1/work/'+w.id+'/run',w.run_request.body);return detail(w.id);}
@@ -241,7 +249,8 @@ document.addEventListener('click',async e=>{
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset.work)e.target.click();});
 $('#dialog-close').onclick=()=>$('#dialog').close();
 $('#project').onchange=async e=>{state.project=e.target.value;state.bulletinExpanded=false;state.bulletins=[];state.detail=null;state.filter='all';state.search='';await refresh();render();};
-$('#logout').onclick=async()=>{await api('/v1/logout',{});state.me=null;showLogin();};
+$('#logout').onclick=async()=>{await api('/v1/logout',{});localStorage.removeItem('agentboard_human_name');state.me=null;showLogin();};
+$('#human-login-form').onsubmit=async e=>{e.preventDefault();const name=$('#human-name').value.trim();try{await api('/v1/human-session',{name});localStorage.setItem('agentboard_human_name',name);$('#login-error').textContent='';await boot();}catch(err){$('#login-error').textContent=err.message;}};
 $('#login-form').onsubmit=async e=>{e.preventDefault();const token=$('#token').value;$('#token').value='';try{await api('/v1/browser-session',{}, {Authorization:'Bearer '+token});$('#login-error').textContent='';await boot();}catch(err){$('#login-error').textContent=err.message;}};
 boot().catch(e=>{$('#login-error').textContent=e.message;showLogin();});
 setInterval(refresh,10000);

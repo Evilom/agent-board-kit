@@ -6,6 +6,8 @@ The web UI uses a neutral dark theme. Devices pull source updates from Git; `scr
 
 For intermediate files shared across devices, use an SMB share on the same trusted LAN, or object storage (such as OSS) or a permission-controlled cloud drive across LANs. Record the versioned location and SHA256 in the work item; see [shared file handoff](docs/shared-file-handoff.md).
 
+The optional `human_access` server setting enables name-only browser sessions on configured private networks for one project. Members can read the board, publish bulletins, and create unassigned work. A name is a display label, not authentication; claiming, assigning, reviewing, messaging agents, and device operations still require paired device credentials. The feature is disabled by default. See the [Chinese setup example](README.zh-CN.md#内网成员从网页进入). Do not expose name-only access directly to the public internet.
+
 English | [简体中文](README.zh-CN.md)
 
 Agent Board coordinates agents across computers around shared tasks, messages, handoffs, evidence, and existing knowledge. The main computer runs the server and a local client; secondary computers run clients only.

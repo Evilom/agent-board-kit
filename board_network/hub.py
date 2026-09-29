@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import re
 import ssl
@@ -36,6 +37,14 @@ class Hub:
 
     def validate(self):
         projects = self.config.get("projects", {})
+        access = self.config.get('human_access', {})
+        if access.get('enabled'):
+            if access.get('project_id') not in projects or not access.get('allowed_networks'):
+                raise NetworkError('human access requires an existing project and allowed networks')
+            for network in access['allowed_networks']:
+                subnet = ipaddress.ip_network(network, strict=True)
+                if not (subnet.is_private or subnet.is_loopback):
+                    raise NetworkError('human access must be limited to private networks')
         for project_id, project in projects.items():
             identifier(project_id)
             for workspace_id, ws in project.get("workspaces", {}).items():
@@ -176,6 +185,12 @@ class Hub:
         return public_task(task)
 
     def route(self, actor, method, path, query, body):
+        if actor[1].get('kind') == 'human':
+            readable = path in ('/v1/me', '/v1/projects', '/v1/work', '/v1/agents', '/v1/bulletins') or bool(re.fullmatch(r'/v1/work/[\w.-]+|/v1/artifacts/[\w.-]+', path))
+            writable = path in ('/v1/work', '/v1/bulletins') or bool(re.fullmatch(r'/v1/bulletins/[\w.-]+/read', path))
+            searchable = path in ('/v1/knowledge/search', '/v1/shared-knowledge/search')
+            if not ((method == 'GET' and readable) or (method == 'POST' and (writable or searchable))):
+                raise NetworkError('姓名入口无权执行此操作', 403)
         if path.startswith('/v1/resources') or path.startswith('/v1/resource-operations'):
             return self.resources.route(actor, method, path, query, body)
         if path == '/v1/shared-knowledge/search' and method == 'POST':
@@ -207,7 +222,8 @@ class Hub:
                     'remote_resources': [{'id': r['id'], 'name': r['name'], 'online': r['online']} for r in catalog if 'read' in r['permissions'] and r['device_id'] != self.config.get('worker', {}).get('device_id')],
                     'note': 'Existing sources only. Use resource search for remote device sources; offline sources are not claimed complete.'}
         if method == "GET" and path == "/v1/me":
-            return {"principal_id": actor[0], "device_id": actor[1]["device_id"], "version": VERSION}
+            return {"principal_id": actor[0], "device_id": actor[1]["device_id"], "version": VERSION,
+                    "kind": actor[1].get('kind', 'device'), "display_name": actor[1].get('display_name')}
         if method == "GET" and path == "/v1/projects":
             return self.project_list(actor)
         if method == "GET" and path == "/v1/tasks":
@@ -291,7 +307,19 @@ def make_server(config, address=None):
                         body = browser.ticket(hub.authenticate(header))
                     session = browser.exchange(body.get("ticket", ""))
                     return self.respond(200, {"ok": True}, cookie="agentboard_session=" + session + "; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800" + ("; Secure" if isinstance(self.connection, ssl.SSLSocket) else ""))
+                if self.command == 'POST' and url.path == '/v1/human-session':
+                    access = hub.config.get('human_access', {})
+                    if header or not origin or not access.get('enabled'):
+                        raise NetworkError('姓名入口不可用', 403)
+                    if not any(ipaddress.ip_address(self.client_address[0]) in ipaddress.ip_network(n) for n in access['allowed_networks']):
+                        raise NetworkError('姓名入口仅供指定内网使用', 403)
+                    if set(body) != {'name'}:
+                        raise NetworkError('只需填写称呼')
+                    session = browser.human_session(body['name'])
+                    return self.respond(200, {'ok': True}, cookie='agentboard_session=' + session + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800' + ('; Secure' if isinstance(self.connection, ssl.SSLSocket) else ''))
                 actor = hub.authenticate(header) if header else browser.authenticate(self.headers.get("Cookie", ""))
+                if actor[1].get('kind') == 'human' and not any(ipaddress.ip_address(self.client_address[0]) in ipaddress.ip_network(n) for n in hub.config['human_access']['allowed_networks']):
+                    raise NetworkError('姓名入口仅供指定内网使用', 403)
                 if self.command == "POST" and url.path == "/v1/browser-ticket":
                     return self.respond(200, browser.ticket(actor))
                 if self.command == "POST" and url.path == "/v1/logout":
